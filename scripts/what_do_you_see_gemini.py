@@ -5,7 +5,7 @@ gemini_vision_node.py
 ROS1 Noetic node that:
   - Subscribes to /usb_cam/image_raw (sensor_msgs/Image)
   - Converts the latest frame to a base64 JPEG
-  - Sends it to Google Gemini Vision API via raw HTTP (no heavy SDK needed)
+  - POSTs it to the Google Gemini API via raw HTTP (no SDK needed)
   - Publishes the model's text response to /gemini_vision/response (std_msgs/String)
 
 Compatible with Python 3.7 on Debian 10 / ROS Noetic.
@@ -15,7 +15,7 @@ Dependencies (all Python 3.7 compatible):
   pip3 install "httpx==0.23.3"
 
 Get a free API key (no credit card required):
-  https://aistudio.google.com → "Get API key"
+  https://aistudio.google.com -> "Get API key"
 
 Environment variable (set before running):
   export GEMINI_API_KEY="AIza..."
@@ -41,14 +41,14 @@ from std_msgs.msg import String
 # Configuration
 # ---------------------------------------------------------------------------
 STATIC_PROMPT  = "What do you see?"
-MODEL_ID       = "gemini-1.5-flash"   # fast, free-tier, vision-capable
-MAX_TOKENS     = 512
+MODEL_ID       = "gemini-2.5-flash"   # current stable free-tier vision model
+MAX_TOKENS     = 1024
 JPEG_QUALITY   = 75    # 0-100; lower = smaller payload, faster upload
 QUERY_INTERVAL = 5.0   # seconds between API calls
 
 GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
-    "{model}:generateContent?key={key}"
+    "{model}:generateContent"
 )
 
 
@@ -61,7 +61,13 @@ class GeminiVisionNode:
             rospy.logfatal("GEMINI_API_KEY environment variable is not set. Exiting.")
             raise SystemExit(1)
 
-        self._api_url = GEMINI_API_URL.format(model=MODEL_ID, key=api_key)
+        self._api_url = GEMINI_API_URL.format(model=MODEL_ID)
+
+        # Auth goes in the header, not the URL
+        self._headers = {
+            "Content-Type":  "application/json",
+            "x-goog-api-key": api_key,
+        }
 
         self._bridge       = CvBridge()
         self._lock         = threading.Lock()
@@ -82,7 +88,8 @@ class GeminiVisionNode:
         rospy.Timer(rospy.Duration(QUERY_INTERVAL), self._timer_callback)
 
         rospy.loginfo(
-            "gemini_vision_node ready. Querying Gemini every %.1f s.", QUERY_INTERVAL
+            "gemini_vision_node ready. Model: %s. Querying every %.1f s.",
+            MODEL_ID, QUERY_INTERVAL
         )
 
     # ------------------------------------------------------------------
@@ -127,7 +134,6 @@ class GeminiVisionNode:
         try:
             b64_image = self._encode_frame(frame)
 
-            # Gemini multimodal request format
             payload = {
                 "contents": [
                     {
@@ -150,12 +156,10 @@ class GeminiVisionNode:
                 },
             }
 
-            headers = {"Content-Type": "application/json"}
-
             with httpx.Client(timeout=30.0) as client:
                 resp = client.post(
                     self._api_url,
-                    headers=headers,
+                    headers=self._headers,
                     content=json.dumps(payload),
                 )
 
@@ -169,14 +173,15 @@ class GeminiVisionNode:
 
             # Extract text from response
             try:
-                reply = (
-                    data["candidates"][0]["content"]["parts"][0]["text"]
-                )
+                reply = data["candidates"][0]["content"]["parts"][0]["text"]
             except (KeyError, IndexError) as exc:
-                rospy.logerr("Unexpected response structure: %s | raw: %s", exc, data)
+                rospy.logerr(
+                    "Unexpected response structure: %s | raw: %s", exc, data
+                )
                 return
 
             rospy.loginfo("Gemini: %s", reply)
+            exit()
             self._response_pub.publish(String(data=reply))
 
         except httpx.TimeoutException:
