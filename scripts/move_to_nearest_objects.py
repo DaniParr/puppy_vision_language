@@ -16,7 +16,7 @@ Dependencies:
   pip3 install "httpx==0.23.3"
 
 Environment variable:
-  export GEMINI_API_KEY="AIza..."
+  export GEMINI_API_KEY_1="AIza..."
 
 Usage:
   rosrun <your_package> gemini_vision_node.py
@@ -40,12 +40,12 @@ from std_msgs.msg import String
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_ID       = "gemini-2.0-flash"
+MODEL_ID       = "gemini-2.5-flash"
 MAX_TOKENS     = 512
 JPEG_QUALITY   = 75
 QUERY_INTERVAL = 30.0   # seconds between vision+motion cycles
-LINEAR_CLAMP   = 0.3    # m/s  — max forward/back speed (safety limit)
-ANGULAR_CLAMP  = 0.8    # rad/s — max turn speed (safety limit)
+LINEAR_CLAMP   = 0.5    # m/s  — max forward/back speed (safety limit)
+ANGULAR_CLAMP  = 0.5    # rad/s — max turn speed (safety limit)
 MAX_DURATION   = 5.0    # seconds — max any single command can run
 
 GEMINI_API_URL = (
@@ -127,9 +127,9 @@ class GeminiVisionNode:
     def __init__(self):
         rospy.init_node("gemini_vision_node", anonymous=False)
 
-        api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = os.environ.get("GEMINI_API_KEY_1")
         if not api_key:
-            rospy.logfatal("GEMINI_API_KEY environment variable is not set. Exiting.")
+            rospy.logfatal("GEMINI_API_KEY_1 environment variable is not set. Exiting.")
             raise SystemExit(1)
 
         self._api_url = GEMINI_API_URL.format(model=MODEL_ID)
@@ -293,8 +293,8 @@ class GeminiVisionNode:
                     if rospy.is_shutdown():
                         break
 
-                    linear_x   = self._clamp(float(cmd.get("linear_x",   0.0)), LINEAR_CLAMP)
-                    angular_z  = self._clamp(float(cmd.get("angular_z",  0.0)), ANGULAR_CLAMP)
+                    linear_x   = 0.5 + self._clamp(float(cmd.get("linear_x",   0.0)), LINEAR_CLAMP)
+                    angular_z  = 0.5 + self._clamp(float(cmd.get("angular_z",  0.0)), ANGULAR_CLAMP)
                     duration   = min(float(cmd.get("duration_sec", 1.0)), MAX_DURATION)
                     desc       = cmd.get("description", "")
 

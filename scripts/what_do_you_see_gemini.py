@@ -18,7 +18,7 @@ Get a free API key (no credit card required):
   https://aistudio.google.com -> "Get API key"
 
 Environment variable (set before running):
-  export GEMINI_API_KEY="AIza..."
+  export GEMINI_API_KEY_1="AIza..."
 
 Usage:
   rosrun <your_package> gemini_vision_node.py
@@ -40,9 +40,9 @@ from std_msgs.msg import String
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-STATIC_PROMPT  = "What do you see?"
+STATIC_PROMPT  = "What do you see in one sentence?"
 MODEL_ID       = "gemini-2.5-flash"   # current stable free-tier vision model
-MAX_TOKENS     = 1024
+MAX_TOKENS     = 2048
 JPEG_QUALITY   = 75    # 0-100; lower = smaller payload, faster upload
 QUERY_INTERVAL = 5.0   # seconds between API calls
 
@@ -56,9 +56,9 @@ class GeminiVisionNode:
     def __init__(self):
         rospy.init_node("gemini_vision_node", anonymous=False)
 
-        api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = os.environ.get("GEMINI_API_KEY_1")
         if not api_key:
-            rospy.logfatal("GEMINI_API_KEY environment variable is not set. Exiting.")
+            rospy.logfatal("GEMINI_API_KEY_1 environment variable is not set. Exiting.")
             raise SystemExit(1)
 
         self._api_url = GEMINI_API_URL.format(model=MODEL_ID)
