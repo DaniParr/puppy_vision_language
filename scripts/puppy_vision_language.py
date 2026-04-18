@@ -1,0 +1,278 @@
+import rospy
+import threading
+import numpy as np
+from datetime import datetime
+from cv_bridge import CvBridge
+from puppy_control.msg import Pose
+from puppy_control.srv import SetRunActionName
+from sensor_msgs.msg import Image
+from sensor_msgs.msg import Twist
+from std_msgs.msg import String
+
+from brain import Brain
+
+STOP_KEYWORDS = [
+    "stop",
+    "abort",
+    "wait",
+    "hold on",
+]
+
+# Motion constants
+LINEAR_SPEED  = 0.2   # m/s
+ANGULAR_SPEED = 0.5   # rad/s
+
+class PuppyVisionLanguageNode:
+    """
+    Main node for the puppy vision language.
+    """
+    def __init__(self):
+
+        rospy.init_node("puppy_vision_language", anonymous=False)
+
+        self.brain = Brain()
+
+        # Trackers
+        self.last_image       = None
+        self.last_update_time = datetime.now()
+
+        # ROS interfacing attributes
+        self._bridge         = CvBridge()
+        self._frame_lock     = threading.Lock()
+        self._motion_lock    = threading.Lock()
+        self._latest_frame   = None
+        self._executing      = False
+        self._stop_event     = threading.Event()
+
+        # Publishers
+        self._pose_pub = rospy.Publisher("/puppy_control/pose", Pose, queue_size=10)
+        self._vel_pub  = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
+
+        # Service Proxies
+        self._action_service = rospy.ServiceProxy("/puppy_control/runActionGroup", SetRunActionName)
+
+        # Subscribers
+        self._prompt_sub = rospy.Subscriber("/prompt", String, self._prompt_callback, queue_size=10)
+        self._img_sub    = rospy.Subscriber(
+            "/usb_cam/image_raw", Image, self._image_callback,
+            queue_size=1, buff_size=2 ** 24,
+        )
+
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
+
+    def _image_callback(self, msg: Image) -> None:
+        with self._frame_lock:
+            self._latest_frame  = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            self.last_update_time = datetime.now()
+
+    def _prompt_callback(self, msg: String) -> None:
+
+        prompt        = msg.data
+        time_received = datetime.now()
+
+        if self._executing:
+            if any(word in prompt.lower() for word in STOP_KEYWORDS):
+                rospy.loginfo("Stop keyword detected — interrupting current sequence.")
+                self._stop_event.set()
+                self._publish_zero_velocity()
+                self._executing = False
+            return
+
+        # Kick off execution in a background thread so the callback returns immediately
+        self._executing  = True
+        self._stop_event.clear()
+        thread = threading.Thread(
+            target=self._execute_sequence,
+            args=(prompt, time_received),
+            daemon=True,
+        )
+        thread.start()
+
+    # ------------------------------------------------------------------
+    # Sequence execution
+    # ------------------------------------------------------------------
+
+    def _execute_sequence(self, prompt: str, time_received: datetime) -> None:
+        """
+        Background thread: wait for a fresh frame, query the brain,
+        then dispatch each action in order.
+        """
+        try:
+            # Wait until we have a frame newer than when the prompt arrived
+            rate = rospy.Rate(10)
+            while not rospy.is_shutdown():
+                with self._frame_lock:
+                    frame_ready = (
+                        self._latest_frame is not None
+                        and self.last_update_time >= time_received
+                    )
+                if frame_ready:
+                    break
+                rospy.logwarn("Waiting for a fresh frame...")
+                rate.sleep()
+
+            with self._frame_lock:
+                frame = self._latest_frame.copy()
+
+            summary, actions = self.brain.send_request(prompt, frame)
+
+            if not actions:
+                rospy.logwarn("No actions returned from brain.")
+                return
+
+            rospy.loginfo("Summary: %s | %d action(s)", summary, len(actions))
+
+            for action in actions:
+
+                if self._stop_event.is_set():
+                    rospy.loginfo("Stop event detected — aborting action sequence.")
+                    break
+
+                file_name   = action.get("file_name")
+                action_type = action.get("action_type", "default")
+                description = action.get("description", "")
+
+                if not file_name:
+                    rospy.logwarn("Action missing file_name, skipping.")
+                    continue
+
+                rospy.loginfo(
+                    "Dispatching — file: %s | type: %s | note: %s",
+                    file_name, action_type, description,
+                )
+
+                if action_type == "scan":
+                    cx = action.get("scan_center_x")
+                    cy = action.get("scan_center_y")
+                    w  = action.get("scan_width")
+                    h  = action.get("scan_height")
+                    if None in (cx, cy, w, h):
+                        rospy.logwarn("Scan action missing bounding box fields, skipping.")
+                        continue
+                    self._execute_scan(file_name, cx, cy, w, h)
+
+                elif action_type == "move":
+                    meters = action.get("move_meters")
+                    if meters is None:
+                        rospy.logwarn("Move action missing move_meters, skipping.")
+                        continue
+                    self._execute_move(file_name, meters)
+
+                elif action_type == "rotate":
+                    radians = action.get("rotate_radians")
+                    if radians is None:
+                        rospy.logwarn("Rotate action missing rotate_radians, skipping.")
+                        continue
+                    self._execute_rotate(file_name, radians)
+
+                else:
+                    self._execute_action(file_name)
+
+        except Exception as exc:
+            rospy.logerr("Error in execute_sequence: %s", exc)
+
+        finally:
+            self._executing = False
+
+    # ------------------------------------------------------------------
+    # Action executors
+    # ------------------------------------------------------------------
+
+    def _execute_action(self, file_name: str) -> None:
+        """Play a default action file via the action group service."""
+        rospy.loginfo("Playing action file: %s", file_name)
+        try:
+            self._action_service(file_name, 1)
+        except rospy.ServiceException as exc:
+            rospy.logerr("Action service call failed for '%s': %s", file_name, exc)
+
+    def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
+        """
+        Play the action file, then log/publish the bounding box of the
+        object of interest for downstream use.
+        """
+        rospy.loginfo(
+            "Scan — file: %s | center=(%.1f, %.1f) | size=(%.1f x %.1f)",
+            file_name, cx, cy, w, h,
+        )
+        self._execute_action(file_name)
+
+        # Publish bounding box so other nodes can consume it
+        bbox_msg = String(
+            data="scan:{},{},{},{}".format(cx, cy, w, h)
+        )
+        self._pose_pub  # placeholder — swap for a dedicated bbox publisher if needed
+        rospy.loginfo("Scan bbox published: cx=%.1f cy=%.1f w=%.1f h=%.1f", cx, cy, w, h)
+
+    def _execute_move(self, file_name: str, meters: float) -> None:
+        """
+        Play the action file, then drive forward/backward the requested distance
+        using a timed velocity command.
+        """
+        rospy.loginfo("Move — file: %s | %.3f m", file_name, meters)
+
+        if self._stop_event.is_set():
+            return
+
+        duration = abs(meters) / LINEAR_SPEED
+        twist     = Twist()
+        twist.linear.x = LINEAR_SPEED if meters >= 0 else -LINEAR_SPEED
+
+        rospy.loginfo(
+            "Driving %s %.3f m (%.2f s)",
+            "forward" if meters >= 0 else "backward", abs(meters), duration,
+        )
+
+        start = rospy.Time.now()
+        rate  = rospy.Rate(20)
+        while (rospy.Time.now() - start).to_sec() < duration:
+            if self._stop_event.is_set():
+                break
+            self._vel_pub.publish(twist)
+            rate.sleep()
+
+        self._publish_zero_velocity()
+
+    def _execute_rotate(self, file_name: str, radians: float) -> None:
+        """
+        Play the action file, then rotate by the requested angle
+        using a timed velocity command.
+        """
+        rospy.loginfo("Rotate — file: %s | %.4f rad", file_name, radians)
+
+        if self._stop_event.is_set():
+            return
+
+        duration = abs(radians) / ANGULAR_SPEED
+        twist     = Twist()
+        twist.angular.z = ANGULAR_SPEED if radians >= 0 else -ANGULAR_SPEED
+
+        rospy.loginfo(
+            "Rotating %s %.4f rad (%.2f s)",
+            "CCW" if radians >= 0 else "CW", abs(radians), duration,
+        )
+
+        start = rospy.Time.now()
+        rate  = rospy.Rate(20)
+        while (rospy.Time.now() - start).to_sec() < duration:
+            if self._stop_event.is_set():
+                break
+            self._vel_pub.publish(twist)
+            rate.sleep()
+
+        self._publish_zero_velocity()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _publish_zero_velocity(self) -> None:
+        """Publish a zero Twist to halt all motion."""
+        self._vel_pub.publish(Twist())
+
+
+if __name__ == "__main__":
+    node = PuppyVisionLanguageNode()
+    rospy.spin()
