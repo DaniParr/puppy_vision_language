@@ -191,8 +191,8 @@ class PuppyVisionLanguageNode:
 
     def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
         """
-        Play the action file, then log/publish the bounding box of the
-        object of interest for downstream use.
+        Play the action file, draw the bounding box on the current frame,
+        and save it to disk.
         """
         rospy.loginfo(
             "Scan — file: %s | center=(%.1f, %.1f) | size=(%.1f x %.1f)",
@@ -200,12 +200,32 @@ class PuppyVisionLanguageNode:
         )
         self._execute_action(file_name)
 
-        # Publish bounding box so other nodes can consume it
-        bbox_msg = String(
-            data="scan:{},{},{},{}".format(cx, cy, w, h)
+        with self._frame_lock:
+            if self._latest_frame is None:
+                rospy.logwarn("No frame available to annotate.")
+                return
+            frame = self._latest_frame.copy()
+
+        # Convert center/size to top-left corner for cv2
+        x1 = int(cx - w / 2)
+        y1 = int(cy - h / 2)
+        x2 = int(cx + w / 2)
+        y2 = int(cy + h / 2)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.circle(frame, (int(cx), int(cy)), 4, (0, 0, 255), -1)
+        cv2.putText(
+            frame,
+            "cx={:.0f} cy={:.0f}  w={:.0f} h={:.0f}".format(cx, cy, w, h),
+            (x1, max(y1 - 10, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5, (0, 255, 0), 1,
         )
-        self._pose_pub  # placeholder — swap for a dedicated bbox publisher if needed
-        rospy.loginfo("Scan bbox published: cx=%.1f cy=%.1f w=%.1f h=%.1f", cx, cy, w, h)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = "/tmp/scan_{}_{}.jpg".format(file_name.replace(".", "_"), timestamp)
+        cv2.imwrite(save_path, frame)
+        rospy.loginfo("Scan image saved to: %s", save_path)
 
     def _execute_move(self, file_name: str, meters: float) -> None:
         """
