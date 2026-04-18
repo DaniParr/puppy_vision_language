@@ -200,7 +200,7 @@ class Brain:
             "x-goog-api-key": random.choice(self._api_keys),
         }
 
-    def send_request(prompt: str, frame: np.array) -> (str | None, list | None):
+    def send_request(self, prompt: str, frame: np.array) -> (str, list):
         """
         Sends HTTP request to gemini API.
         """
@@ -245,14 +245,14 @@ class Brain:
             # Get response
             if resp.status_code != 200:
                 rospy.logerr("API error %d: %s", resp.status_code, resp.text[:300])
-                return None, None
+                return "", []
 
             data = resp.json()
             return self._handle_response(data)
 
         except httpx.TimeoutException:
             rospy.logerr("Gemini API request timed out.")
-            return None, None
+            return "", []
         
     def _encode_frame(self, frame):
         
@@ -264,7 +264,7 @@ class Brain:
         
         return base64.standard_b64encode(buf.tobytes()).decode("utf-8")
     
-    def _handle_response(self, data) -> (str | None, list | None):
+    def _handle_response(self, data) -> (str, list):
         """
         Extract the robot_action function call from Gemini's response.
         Returns (summary, actions) or (None, None) on failure.
@@ -273,7 +273,7 @@ class Brain:
             parts = data["candidates"][0]["content"]["parts"]
         except (KeyError, IndexError) as exc:
             rospy.logerr("Unexpected response structure: %s", exc)
-            return None, None
+            return "", []
 
         for part in parts:
             if "functionCall" not in part:
@@ -294,4 +294,4 @@ class Brain:
             return summary, actions
 
         rospy.logwarn("No valid robot_action function call found in response.")
-        return None, None
+        return "", []

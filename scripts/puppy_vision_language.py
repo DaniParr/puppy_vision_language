@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import rospy
 import threading
 import numpy as np
@@ -6,7 +7,7 @@ from cv_bridge import CvBridge
 from puppy_control.msg import Pose
 from puppy_control.srv import SetRunActionName
 from sensor_msgs.msg import Image
-from sensor_msgs.msg import Twist
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
 from brain import Brain
