@@ -255,35 +255,62 @@ class PuppyVisionLanguageNode:
         x2 = int(cx_px + w_px / 2)
         y2 = int(cy_px + h_px / 2)
 
-        # --- Estimate depth via vertical disparity ---
-        # Crop the bounding box region from both frames and find vertical shift
-        # using normalized cross-correlation on grayscale patches
-        pad = 20  # extra context around bbox for matching
-        bx1 = max(x1 - pad, 0)
-        bx2 = min(x2 + pad, frame_w)
-        by1 = max(y1 - pad, 0)
-        by2 = min(y2 + pad, frame_h)
+        # --- Estimate depth via FAST keypoint vertical disparity ---
+        gray_stand = cv2.cvtColor(frame_stand, cv2.COLOR_BGR2GRAY)
+        gray_lie   = cv2.cvtColor(frame_lie,   cv2.COLOR_BGR2GRAY)
 
-        patch_stand = cv2.cvtColor(frame_stand[by1:by2, bx1:bx2], cv2.COLOR_BGR2GRAY).astype(np.float32)
-        patch_lie   = cv2.cvtColor(frame_lie[by1:by2, bx1:bx2],   cv2.COLOR_BGR2GRAY).astype(np.float32)
+        fast = cv2.FastFeatureDetector_create()
+        kps  = fast.detect(gray_stand, None)
 
-        # Cross-correlate to find vertical pixel shift between the two patches
-        result = cv2.matchTemplate(patch_lie, patch_stand, cv2.TM_CCOEFF_NORMED)
-        _, _, _, max_loc = cv2.minMaxLoc(result)
-        disparity_px = float(max_loc[1])  # vertical shift in pixels
+        # Filter keypoints to those inside or near the bounding box
+        margin = 20
+        roi_kps = [
+            kp for kp in kps
+            if (x1 - margin) <= kp.pt[0] <= (x2 + margin)
+            and (y1 - margin) <= kp.pt[1] <= (y2 + margin)
+        ]
 
-        # Depth from similar triangles: Z = (f_y * baseline) / disparity
-        f_y = float(CAMERA_INTRINSIC[1, 1])
-        if disparity_px > 0.0:
-            depth_m = (f_y * STEREO_BASELINE_M) / disparity_px
+        if not roi_kps:
+            rospy.logwarn("No FAST keypoints found near bounding box — cannot estimate depth.")
+            depth_m      = float("inf")
+            disparity_px = 0.0
         else:
-            depth_m = float("inf")
-            rospy.logwarn("Zero disparity — could not estimate depth.")
+            # Track keypoints from standing frame into lying frame with Lucas-Kanade
+            pts_stand = np.array([kp.pt for kp in roi_kps], dtype=np.float32).reshape(-1, 1, 2)
+            pts_lie, status, _ = cv2.calcOpticalFlowPyrLK(gray_stand, gray_lie, pts_stand, None)
 
-        rospy.loginfo("Estimated depth: %.3f m", depth_m)
+            # Keep only successfully tracked points
+            good_stand = pts_stand[status.ravel() == 1]
+            good_lie   = pts_lie[status.ravel() == 1]
+
+            if len(good_stand) == 0:
+                rospy.logwarn("No points tracked successfully — cannot estimate depth.")
+                depth_m      = float("inf")
+                disparity_px = 0.0
+            else:
+                # Vertical disparity per point, take median for robustness
+                disparities  = np.abs(good_lie[:, 0, 1] - good_stand[:, 0, 1])
+                disparity_px = float(np.median(disparities))
+
+                f_y = float(CAMERA_INTRINSIC[1, 1])
+                if disparity_px > 0.0:
+                    depth_m = (f_y * STEREO_BASELINE_M) / disparity_px
+                else:
+                    depth_m = float("inf")
+                    rospy.logwarn("Zero disparity — could not estimate depth.")
+
+                rospy.loginfo(
+                    "FAST tracked %d/%d points | median disparity=%.2f px | depth=%.3f m",
+                    len(good_stand), len(roi_kps), disparity_px, depth_m,
+                )
 
         # --- Annotate and save ---
         annotated = frame_stand.copy()
+
+        # Draw tracked points
+        for pt in good_stand.reshape(-1, 2):
+            cv2.circle(annotated, (int(pt[0]), int(pt[1])), 3, (255, 255, 0), -1)
+
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.circle(annotated, (int(cx_px), int(cy_px)), 4, (0, 0, 255), -1)
         cv2.putText(
@@ -294,7 +321,7 @@ class PuppyVisionLanguageNode:
         )
         cv2.putText(
             annotated,
-            "depth={:.2f}m  disp={:.1f}px".format(depth_m, disparity_px),
+            "depth={:.2f}m  disp={:.1f}px  pts={}".format(depth_m, disparity_px, len(good_stand)),
             (x1, max(y1 - 6, 24)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1,
         )
