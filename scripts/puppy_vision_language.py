@@ -24,6 +24,13 @@ STOP_KEYWORDS = [
 LINEAR_SPEED  = 0.1   # m/s
 ANGULAR_SPEED = 0.5   # rad/s
 
+# Vertical baseline between camera positions (standing vs lying down)
+STEREO_BASELINE_M = 0.041275  # <-- fill in your measured value in meters
+
+CAMERA_INTRINSIC = np.matrix([  [619.063979, 0,          302.560920],
+                                [0,          613.745352, 237.714934],
+                                [0,          0,          1]])
+
 class PuppyVisionLanguageNode:
     """
     Main node for the puppy vision language.
@@ -192,49 +199,100 @@ class PuppyVisionLanguageNode:
         except rospy.ServiceException as exc:
             rospy.logerr("Action service call failed for '%s': %s", file_name, exc)
 
+
     def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
         """
-        Play the action file, draw the bounding box on the current frame,
-        and save it to disk.
+        Play the action file, capture two frames at different heights to estimate
+        depth via vertical disparity, then save the annotated image.
         """
         rospy.loginfo(
-            "Scan — file: %s | center=(%.1f, %.1f) | size=(%.1f x %.1f)",
+            "Scan — file: %s | center=(%.2f, %.2f) | size=(%.2f x %.2f)",
             file_name, cx, cy, w, h,
         )
         self._execute_action(file_name)
 
+        settle = rospy.Duration(0.5)  # wait for robot to settle after each pose
+
+        # --- Shot 1: standing ---
+        self._execute_action("stand.d6ac")
+        rospy.sleep(settle)
         with self._frame_lock:
-            if self.scanned_frame is None:
-                rospy.logwarn("No frame available to annotate.")
+            if self._latest_frame is None:
+                rospy.logwarn("No frame available for standing shot.")
                 return
-            frame = self.scanned_frame
+            frame_stand = self._latest_frame.copy()
 
-        # Get pixel centers
-        frame_h, frame_w = frame.shape[:2]
-        cx = cx * frame_w
-        cy = cy * frame_h
-        w = w * frame_w
-        h = h * frame_h
+        # --- Shot 2: lying down ---
+        self._execute_action("lie_down.d6ac")
+        rospy.sleep(settle)
+        with self._frame_lock:
+            if self._latest_frame is None:
+                rospy.logwarn("No frame available for lying down shot.")
+                return
+            frame_lie = self._latest_frame.copy()
 
-        # Convert center/size to top-left corner for cv2
-        x1 = int(cx - w / 2)
-        y1 = int(cy - h / 2)
-        x2 = int(cx + w / 2)
-        y2 = int(cy + h / 2)
+        # --- Return to standing ---
+        self._execute_action("stand.d6ac")
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.circle(frame, (int(cx), int(cy)), 4, (0, 0, 255), -1)
+        # --- Convert normalized coords to pixels using standing frame ---
+        frame_h, frame_w = frame_stand.shape[:2]
+        cx_px = cx * frame_w
+        cy_px = cy * frame_h
+        w_px  = w  * frame_w
+        h_px  = h  * frame_h
+
+        x1 = int(cx_px - w_px / 2)
+        y1 = int(cy_px - h_px / 2)
+        x2 = int(cx_px + w_px / 2)
+        y2 = int(cy_px + h_px / 2)
+
+        # --- Estimate depth via vertical disparity ---
+        # Crop the bounding box region from both frames and find vertical shift
+        # using normalized cross-correlation on grayscale patches
+        pad = 20  # extra context around bbox for matching
+        bx1 = max(x1 - pad, 0)
+        bx2 = min(x2 + pad, frame_w)
+        by1 = max(y1 - pad, 0)
+        by2 = min(y2 + pad, frame_h)
+
+        patch_stand = cv2.cvtColor(frame_stand[by1:by2, bx1:bx2], cv2.COLOR_BGR2GRAY).astype(np.float32)
+        patch_lie   = cv2.cvtColor(frame_lie[by1:by2, bx1:bx2],   cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+        # Cross-correlate to find vertical pixel shift between the two patches
+        result = cv2.matchTemplate(patch_lie, patch_stand, cv2.TM_CCOEFF_NORMED)
+        _, _, _, max_loc = cv2.minMaxLoc(result)
+        disparity_px = float(max_loc[1])  # vertical shift in pixels
+
+        # Depth from similar triangles: Z = (f_y * baseline) / disparity
+        f_y = float(CAMERA_INTRINSIC[1, 1])
+        if disparity_px > 0.0:
+            depth_m = (f_y * STEREO_BASELINE_M) / disparity_px
+        else:
+            depth_m = float("inf")
+            rospy.logwarn("Zero disparity — could not estimate depth.")
+
+        rospy.loginfo("Estimated depth: %.3f m", depth_m)
+
+        # --- Annotate and save ---
+        annotated = frame_stand.copy()
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.circle(annotated, (int(cx_px), int(cy_px)), 4, (0, 0, 255), -1)
         cv2.putText(
-            frame,
-            "cx={:.0f} cy={:.0f}  w={:.0f} h={:.0f}".format(cx, cy, w, h),
-            (x1, max(y1 - 10, 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5, (0, 255, 0), 1,
+            annotated,
+            "cx={:.0f} cy={:.0f}  w={:.0f} h={:.0f}".format(cx_px, cy_px, w_px, h_px),
+            (x1, max(y1 - 22, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
+        )
+        cv2.putText(
+            annotated,
+            "depth={:.2f}m  disp={:.1f}px".format(depth_m, disparity_px),
+            (x1, max(y1 - 6, 24)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1,
         )
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_path = "/tmp/scan_{}_{}.jpg".format(file_name.replace(".", "_"), timestamp)
-        cv2.imwrite(save_path, frame)
+        cv2.imwrite(save_path, annotated)
         rospy.loginfo("Scan image saved to: %s", save_path)
 
     def _execute_move(self, file_name: str, meters: float) -> None:
