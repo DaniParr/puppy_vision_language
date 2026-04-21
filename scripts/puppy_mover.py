@@ -188,7 +188,7 @@ class PuppyPiDirectDriver:
         return math.atan2(math.sin(angle), math.cos(angle))
 
     def stop_robot(self):
-        self.cmd_pub.publish()
+        self.pup_velocity_pub.publish(Velocity())
 
     def control_loop(self):
         """Main loop that drives the robot to the goal in three phases."""
@@ -221,8 +221,10 @@ class PuppyPiDirectDriver:
 
             # Phase 2: Facing the target — walk forward while correcting heading
             elif distance_error > self.DIST_TOLERANCE:
-                velocity.x = self.K_LINEAR * distance_error
-                velocity.x = self.apply_velocity_limits(velocity.x, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED)
+                linear_speed = self.K_LINEAR * distance_error
+                linear_speed = self.apply_velocity_limits(linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED)
+
+                velocity.x = -linear_speed
 
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED)
@@ -237,7 +239,7 @@ class PuppyPiDirectDriver:
                     self.has_goal = False
                     velocity = Velocity()
 
-            self.cmd_pub.publish(velocity)
+            self.pup_velocity_pub.publish(velocity)
             self.RATE.sleep()
 
 if __name__ == '__main__':
