@@ -25,7 +25,8 @@ LINEAR_SPEED  = 0.1   # m/s
 ANGULAR_SPEED = 0.5   # rad/s
 
 # Vertical baseline between camera positions (standing vs lying down)
-STEREO_BASELINE_M = 0.041275  # <-- fill in your measured value in meters
+STEREO_BASELINE_M = 0.043275  # <-- fill in your measured value in meters
+MARGIN = 20
 
 CAMERA_INTRINSIC = np.matrix([  [619.063979, 0,          302.560920],
                                 [0,          613.745352, 237.714934],
@@ -127,7 +128,20 @@ class PuppyVisionLanguageNode:
                 frame = self._latest_frame.copy()
                 self.scanned_frame = frame
 
-            summary, actions = self.brain.send_request(prompt, frame)
+            if prompt == "scan":
+                summary = "debugging perception"
+                actions = [
+                    {
+                        "file_name": "scan",
+                        "action_type": "scan",
+                        "scan_center_x": 0.5,
+                        "scan_center_y": 0.5,
+                        "scan_width": 0.25,
+                        "scan_height": 0.25,
+                    }
+                ]
+            else:
+                summary, actions = self.brain.send_request(prompt, frame)
 
             if not actions:
                 rospy.logwarn("No actions returned from brain.")
@@ -231,8 +245,10 @@ class PuppyVisionLanguageNode:
         
         with self._frame_lock:
 
-            while self.last_update_time >= time_received:
-                rospy.loginfo("Waiting for newer frame")
+            rate = rospy.Rate(10)
+            while self.last_update_time <= time_received:
+                rospy.loginfo("Waiting for new frame")
+                rate.sleep()
 
             if self._latest_frame is None:
                 rospy.logwarn("No frame available for lying down shot.")
@@ -263,11 +279,10 @@ class PuppyVisionLanguageNode:
         kps  = fast.detect(gray_stand, None)
 
         # Filter keypoints to those inside or near the bounding box
-        margin = 20
         roi_kps = [
             kp for kp in kps
-            if (x1 - margin) <= kp.pt[0] <= (x2 + margin)
-            and (y1 - margin) <= kp.pt[1] <= (y2 + margin)
+            if (cx_px - MARGIN) <= kp.pt[0] <= (cx_px + MARGIN)
+            and (cy_px - MARGIN) <= kp.pt[1] <= (cy_px + MARGIN)
         ]
 
         if not roi_kps:
