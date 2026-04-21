@@ -199,6 +199,8 @@ class PuppyVisionLanguageNode:
 
         except Exception as exc:
             rospy.logerr("Error in execute_sequence: %s", exc)
+            self._execute_action("pee.d6ac")
+            self._execute_action("stand.d6ac")
 
         finally:
             self._executing = False
