@@ -213,8 +213,191 @@ class PuppyVisionLanguageNode:
         except rospy.ServiceException as exc:
             rospy.logerr("Action service call failed for '%s': %s", file_name, exc)
 
-
     def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
+        """
+        Play the action file, capture two frames at different heights, segment the
+        foreground using GrabCut, select the largest blob nearest the center, track
+        FAST keypoints on its boundary for depth estimation, then save annotated image.
+        """
+        rospy.loginfo(
+            "Scan — file: %s | center=(%.2f, %.2f) | size=(%.2f x %.2f)",
+            file_name, cx, cy, w, h,
+        )
+        self._execute_action(file_name)
+
+        settle = rospy.Duration(0.5)
+
+        # --- Shot 1: standing ---
+        self._execute_action("stand.d6ac")
+        rospy.sleep(settle)
+        with self._frame_lock:
+            if self._latest_frame is None:
+                rospy.logwarn("No frame available for standing shot.")
+                return
+            frame_stand = self._latest_frame.copy()
+
+        # --- Shot 2: lying down ---
+        self._execute_action("lie_down.d6ac")
+        time_received = datetime.now()
+        rospy.sleep(settle)
+        with self._frame_lock:
+            rate = rospy.Rate(10)
+            while self.last_update_time <= time_received:
+                rospy.loginfo("Waiting for new frame")
+                rate.sleep()
+            if self._latest_frame is None:
+                rospy.logwarn("No frame available for lying down shot.")
+                return
+            frame_lie = self._latest_frame.copy()
+
+        # --- Return to standing ---
+        self._execute_action("stand.d6ac")
+
+        # --- Convert normalized coords to pixels ---
+        frame_h, frame_w = frame_stand.shape[:2]
+        cx_px = cx * frame_w
+        cy_px = cy * frame_h
+        w_px  = w  * frame_w
+        h_px  = h  * frame_h
+
+        x1 = int(cx_px - w_px / 2)
+        y1 = int(cy_px - h_px / 2)
+        x2 = int(cx_px + w_px / 2)
+        y2 = int(cy_px + h_px / 2)
+
+        # --- GrabCut segmentation on standing frame ---
+        # Use the bounding box as the GrabCut rect hint
+        gc_rect  = (x1, y1, x2 - x1, y2 - y1)
+        gc_mask  = np.zeros(frame_stand.shape[:2], np.uint8)
+        gc_bgd   = np.zeros((1, 65), np.float64)
+        gc_fgd   = np.zeros((1, 65), np.float64)
+        cv2.grabCut(frame_stand, gc_mask, gc_rect, gc_bgd, gc_fgd, 5, cv2.GC_INIT_WITH_RECT)
+
+        # Pixels marked probable or definite foreground
+        fg_mask = np.where((gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+
+        # --- Find blobs and select the largest one closest to center ---
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(fg_mask, connectivity=8)
+
+        # Label 0 is background, skip it
+        best_label  = -1
+        best_area   = 0
+        for label in range(1, num_labels):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area > best_area:
+                best_area  = area
+                best_label = label
+
+        if best_label == -1:
+            rospy.logwarn("GrabCut found no foreground blobs — falling back to bbox region.")
+            object_mask = np.zeros_like(fg_mask)
+            object_mask[y1:y2, x1:x2] = 255
+        else:
+            object_mask = np.where(labels == best_label, 255, 0).astype(np.uint8)
+            blob_cx, blob_cy = centroids[best_label]
+            rospy.loginfo(
+                "Largest blob — area=%d px | centroid=(%.1f, %.1f)",
+                best_area, blob_cx, blob_cy,
+            )
+
+        # --- Extract boundary points of the selected blob ---
+        contours, _ = cv2.findContours(object_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if contours:
+            # Points on the outer contour
+            boundary_pts = np.vstack(contours).squeeze().astype(np.float32)
+            # Also include interior FAST keypoints on the mask
+            gray_stand = cv2.cvtColor(frame_stand, cv2.COLOR_BGR2GRAY)
+            fast       = cv2.FastFeatureDetector_create()
+            all_kps    = fast.detect(gray_stand, None)
+            interior_pts = np.array(
+                [kp.pt for kp in all_kps if object_mask[int(kp.pt[1]), int(kp.pt[0])] == 255],
+                dtype=np.float32,
+            )
+            if len(interior_pts) > 0:
+                roi_pts = np.vstack([boundary_pts, interior_pts])
+            else:
+                roi_pts = boundary_pts
+        else:
+            rospy.logwarn("No contours found — falling back to FAST only inside bbox.")
+            gray_stand = cv2.cvtColor(frame_stand, cv2.COLOR_BGR2GRAY)
+            fast       = cv2.FastFeatureDetector_create()
+            all_kps    = fast.detect(gray_stand, None)
+            roi_pts    = np.array(
+                [kp.pt for kp in all_kps
+                 if x1 <= kp.pt[0] <= x2 and y1 <= kp.pt[1] <= y2],
+                dtype=np.float32,
+            )
+
+        if len(roi_pts) == 0:
+            rospy.logwarn("No points available for depth estimation.")
+            depth_m      = float("inf")
+            disparity_px = 0.0
+            good_stand   = np.array([])
+        else:
+            # --- Lucas-Kanade tracking into lying frame ---
+            gray_lie = cv2.cvtColor(frame_lie, cv2.COLOR_BGR2GRAY)
+            pts_in   = roi_pts.reshape(-1, 1, 2)
+            pts_out, status, _ = cv2.calcOpticalFlowPyrLK(gray_stand, gray_lie, pts_in, None)
+
+            good_stand = pts_in[status.ravel() == 1]
+            good_lie   = pts_out[status.ravel() == 1]
+
+            if len(good_stand) == 0:
+                rospy.logwarn("No points tracked successfully — cannot estimate depth.")
+                depth_m      = float("inf")
+                disparity_px = 0.0
+            else:
+                disparities  = np.abs(good_lie[:, 0, 1] - good_stand[:, 0, 1])
+                disparity_px = float(np.median(disparities))
+
+                f_y = float(CAMERA_INTRINSIC[1, 1])
+                depth_m = (f_y * STEREO_BASELINE_M) / disparity_px if disparity_px > 0.0 else float("inf")
+
+                rospy.loginfo(
+                    "Tracked %d pts | median disparity=%.2f px | depth=%.3f m",
+                    len(good_stand), disparity_px, depth_m,
+                )
+
+        # --- Annotate and save ---
+        annotated = frame_stand.copy()
+
+        # Tint the segmented object region green
+        tint             = annotated.copy()
+        tint[object_mask == 255] = (0, 180, 0)
+        cv2.addWeighted(tint, 0.3, annotated, 0.7, 0, annotated)
+
+        # Draw contours
+        if contours:
+            cv2.drawContours(annotated, contours, -1, (0, 255, 0), 1)
+
+        # Draw tracked points
+        if len(good_stand) > 0:
+            for pt in good_stand.reshape(-1, 2):
+                cv2.circle(annotated, (int(pt[0]), int(pt[1])), 2, (255, 255, 0), -1)
+
+        # Draw bounding box and labels
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 1)
+        cv2.circle(annotated, (int(cx_px), int(cy_px)), 4, (0, 0, 255), -1)
+        cv2.putText(
+            annotated,
+            "cx={:.0f} cy={:.0f}  w={:.0f} h={:.0f}".format(cx_px, cy_px, w_px, h_px),
+            (x1, max(y1 - 22, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1,
+        )
+        cv2.putText(
+            annotated,
+            "depth={:.2f}m  disp={:.1f}px  pts={}".format(depth_m, disparity_px, len(good_stand)),
+            (x1, max(y1 - 6, 24)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1,
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = "/tmp/scan_{}_{}.jpg".format(file_name.replace(".", "_"), timestamp)
+        cv2.imwrite(save_path, annotated)
+        rospy.loginfo("Scan image saved to: %s", save_path)
+
+
+    def _execute_scan_old(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
         """
         Play the action file, capture two frames at different heights to estimate
         depth via vertical disparity, then save the annotated image.
