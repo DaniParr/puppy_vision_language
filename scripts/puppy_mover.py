@@ -43,9 +43,10 @@ class PuppyPiDirectDriver:
         rospy.loginfo("Direct Driver Initialized. Waiting for targets...")
 
     def target_callback(self, msg):
-        depth_x = msg.x
-        angle_y = msg.y
-        self.move_to_target(depth_x, angle_y)
+        depth_x = msg.x   # Forward depth distance to target (0 if not moving forward)
+        depth_y = msg.y   # Lateral depth distance to target (0 if no lateral offset)
+        radian_z = msg.z  # Desired final yaw offset (0 if no yaw correction needed)
+        self.move_to_target(depth_x, depth_y, radian_z)
 
     def pose_callback(self, data):
         self.robot_x = data.pose.position.x
@@ -57,30 +58,96 @@ class PuppyPiDirectDriver:
         (_, _, yaw) = euler_from_quaternion(orientation_list)
         self.robot_yaw = yaw
 
-    def move_to_target(self, depth_x, angle_y):
-        """Calculates the global stopping point and target yaw, then activates the control loop."""
-        travel_distance = depth_x - self.STOP_DISTANCE
+    def move_to_target(self, depth_x, depth_y, radian_z):
+        """
+        Three behaviours based on inputs:
 
-        raw_yaw = self.robot_yaw + angle_y
-        self.goal_yaw = math.atan2(math.sin(raw_yaw), math.cos(raw_yaw))
+        1. Z only (x=0, y=0, z!=0):
+           Pure yaw rotation — robot stays in place and rotates by radian_z.
+
+        2. Y only (x=0, y!=0):
+           Rotate in place to face the direction of atan2(y, 0+epsilon) — i.e. purely
+           sideways. The robot turns to face the target but does not drive forward.
+           If Z is also provided, that becomes the final resting yaw after turning.
+
+        3. X (and optional Y) provided (x!=0):
+           - Compute the bearing to the target using atan2(y, x).
+           - Drive forward sqrt(x²+y²) - STOP_DISTANCE along that bearing.
+           - If Z is also provided, rotate to that final yaw once the destination
+             is reached. Otherwise hold the approach heading as the final yaw.
+        """
+
+        # --- CASE 1: Pure yaw rotation (x=0, y=0, z!=0) ---
+        if depth_x == 0.0 and depth_y == 0.0:
+            if radian_z == 0.0:
+                rospy.logwarn("Received empty goal (x=0, y=0, z=0). Ignoring.")
+                return
+
+            # Stay in place; rotate by radian_z relative to current heading
+            self.goal_x = self.robot_x
+            self.goal_y = self.robot_y
+            self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
+
+            rospy.loginfo(
+                "CASE 1 — Pure yaw: rotate %.2f rad → target yaw %.2f rad (%.1f°)",
+                radian_z, self.goal_yaw, math.degrees(self.goal_yaw)
+            )
+            self.has_goal = True
+            return
+
+        # --- CASE 2: Rotate in place to face target (x=0, y!=0) ---
+        if depth_x == 0.0 and depth_y != 0.0:
+            # Use atan2(y, x) with x≈0 to get the bearing toward the target.
+            bearing_to_target = math.atan2(depth_y, 0.001)  # ±90° depending on y sign
+
+            # Stay in place; rotate to face the bearing
+            self.goal_x = self.robot_x
+            self.goal_y = self.robot_y
+
+            # If a final yaw is provided, use that; otherwise face the target bearing
+            if radian_z != 0.0:
+                self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
+            else:
+                self.goal_yaw = self.normalize_angle(self.robot_yaw + bearing_to_target)
+
+            rospy.loginfo(
+                "CASE 2 — Turn to face: bearing %.2f rad, goal yaw %.2f rad (%.1f°)",
+                bearing_to_target, self.goal_yaw, math.degrees(self.goal_yaw)
+            )
+            self.has_goal = True
+            return
+
+        # --- CASE 3: Drive toward target (x!=0, y optional) ---
+        # Compute bearing and total distance to target using atan2(y, x)
+        bearing_to_target = math.atan2(depth_y, depth_x)
+        total_distance = math.sqrt(depth_x**2 + depth_y**2)
+        travel_distance = total_distance - self.STOP_DISTANCE
+
+        # The heading we need to face to move toward the target
+        approach_yaw = self.normalize_angle(self.robot_yaw + bearing_to_target)
+
+        # Final resting yaw: use Z if provided, otherwise hold approach heading
+        if radian_z != 0.0:
+            self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
+        else:
+            self.goal_yaw = approach_yaw
 
         if travel_distance <= self.DIST_TOLERANCE:
-            rospy.loginfo("Already at target distance. Will rotate to face target yaw only.")
+            rospy.loginfo("CASE 3 — Already within stop distance. Rotating to goal yaw only.")
             self.goal_x = self.robot_x
             self.goal_y = self.robot_y
             self.has_goal = True
             return
 
-        # Calculate relative X/Y displacement
-        rel_x = travel_distance * math.cos(angle_y)
-        rel_y = travel_distance * math.sin(angle_y)
-
-        # Convert to global map coordinates
-        self.goal_x = self.robot_x + (rel_x * math.cos(self.robot_yaw) - rel_y * math.sin(self.robot_yaw))
-        self.goal_y = self.robot_y + (rel_x * math.sin(self.robot_yaw) + rel_y * math.cos(self.robot_yaw))
+        # Project the travel vector into the global map frame
+        # bearing_to_target is relative to the robot, so rotate by robot_yaw
+        global_bearing = self.normalize_angle(self.robot_yaw + bearing_to_target)
+        self.goal_x = self.robot_x + travel_distance * math.cos(global_bearing)
+        self.goal_y = self.robot_y + travel_distance * math.sin(global_bearing)
 
         rospy.loginfo(
-            "New Goal Set - X:%.2f, Y:%.2f, Yaw:%.2f rad (%.1f deg)",
+            "CASE 3 — Drive: bearing %.2f rad, dist %.2f m → goal (%.2f, %.2f), final yaw %.2f rad (%.1f°)",
+            bearing_to_target, travel_distance,
             self.goal_x, self.goal_y,
             self.goal_yaw, math.degrees(self.goal_yaw)
         )
@@ -127,7 +194,6 @@ class PuppyPiDirectDriver:
                 twist.linear.x = self.K_LINEAR * distance_error
                 twist.linear.x = max(min(twist.linear.x, self.MAX_LINEAR_SPEED), -self.MAX_LINEAR_SPEED)
 
-                # --- FIX 3: Use blended heading so yaw correction begins before stopping ---
                 twist.angular.z = self.K_ANGULAR * blended_heading_error
                 twist.angular.z = max(min(twist.angular.z, self.MAX_ANGULAR_SPEED), -self.MAX_ANGULAR_SPEED)
 
