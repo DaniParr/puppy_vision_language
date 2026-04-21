@@ -3,6 +3,19 @@ import math
 import rospy
 from geometry_msgs.msg import PoseStamped, Twist, Point
 from tf.transformations import euler_from_quaternion
+from puppy_control.msg import Velocity, Pose
+
+Stand = {
+    'roll': math.radians(0),
+    'pitch': math.radians(0),
+    'yaw': 0.000,
+    'height': -10,
+    'x_shift': 0.4,
+    'stance_x': 0,
+    'stance_y': 0,
+    'run_time': 2,
+}
+
 
 class PuppyPiDirectDriver:
     def __init__(self):
@@ -11,11 +24,14 @@ class PuppyPiDirectDriver:
         # --- CONFIGURATION & CONSTANTS ---
         self.STOP_DISTANCE = 1.0
         self.RATE = rospy.Rate(10)
-        
+        self.pose_received = False
+
         # Velocity Limits
         self.MAX_LINEAR_SPEED = 0.3
         self.MAX_ANGULAR_SPEED = 0.5
         
+        self.MIN_LINEAR_SPEED = 0.1
+        self.MIN_ANGULAR_SPEED = 0.2 
         # Proportional Control Gains
         self.K_LINEAR = 0.5
         self.K_ANGULAR = 1.0
@@ -35,18 +51,23 @@ class PuppyPiDirectDriver:
         self.goal_y = 0.0
         self.goal_yaw = 0.0
 
+
+
         # --- ROS INTERFACES ---
         self.pose_sub = rospy.Subscriber('/slam_out_pose', PoseStamped, self.pose_callback)
         self.target_sub = rospy.Subscriber('/puppy_move', Point, self.target_callback)
-        self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        self.pup_velocity_pub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=10)
+        self.pup_pose_pub = rospy.Publisher('/puppy_control/pose', Pose, queue_size=10)
 
         rospy.loginfo("Direct Driver Initialized. Waiting for targets...")
 
     def target_callback(self, msg):
+        self.pup_pose_pub.publish(Stand)
         depth_x = msg.x   # Forward depth distance to target (0 if not moving forward)
         depth_y = msg.y   # Lateral depth distance to target (0 if no lateral offset)
         radian_z = msg.z  # Desired final yaw offset (0 if no yaw correction needed)
         self.move_to_target(depth_x, depth_y, radian_z)
+
 
     def pose_callback(self, data):
         self.robot_x = data.pose.position.x
@@ -57,6 +78,15 @@ class PuppyPiDirectDriver:
         ]
         (_, _, yaw) = euler_from_quaternion(orientation_list)
         self.robot_yaw = yaw
+
+    def apply_velocity_limits(self, velocity, max_speed, min_speed):
+        """Clamps to max, and if non-zero, enforces a minimum so the hardware actually moves."""
+        if velocity == 0.0:
+            return 0.0
+        clamped = max(min(velocity, max_speed), -max_speed)
+        if abs(clamped) < min_speed:
+            return math.copysign(min_speed, clamped)
+        return clamped
 
     def move_to_target(self, depth_x, depth_y, radian_z):
         """
@@ -158,7 +188,7 @@ class PuppyPiDirectDriver:
         return math.atan2(math.sin(angle), math.cos(angle))
 
     def stop_robot(self):
-        self.cmd_pub.publish(Twist())
+        self.cmd_pub.publish()
 
     def control_loop(self):
         """Main loop that drives the robot to the goal in three phases."""
@@ -187,21 +217,21 @@ class PuppyPiDirectDriver:
             # Phase 1: Not facing the target direction — pivot first
             if distance_error > self.DIST_TOLERANCE and abs(heading_error) > 0.2:
                 twist.angular.z = self.K_ANGULAR * blended_heading_error
-                twist.angular.z = max(min(twist.angular.z, self.MAX_ANGULAR_SPEED), -self.MAX_ANGULAR_SPEED)
+                twist.angular.z = self.apply_velocity_limits(twist.angular.z, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED)
 
             # Phase 2: Facing the target — walk forward while correcting heading
             elif distance_error > self.DIST_TOLERANCE:
                 twist.linear.x = self.K_LINEAR * distance_error
-                twist.linear.x = max(min(twist.linear.x, self.MAX_LINEAR_SPEED), -self.MAX_LINEAR_SPEED)
+                twist.linear.x = self.apply_velocity_limits(twist.linear.x, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED)
 
                 twist.angular.z = self.K_ANGULAR * blended_heading_error
-                twist.angular.z = max(min(twist.angular.z, self.MAX_ANGULAR_SPEED), -self.MAX_ANGULAR_SPEED)
+                twist.angular.z = self.apply_velocity_limits(twist.angular.z, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED)
 
             # Phase 3: At the destination — rotate to final goal_yaw
             else:
                 if abs(final_yaw_error) > self.YAW_TOLERANCE:
                     twist.angular.z = self.K_ANGULAR * final_yaw_error
-                    twist.angular.z = max(min(twist.angular.z, self.MAX_ANGULAR_SPEED), -self.MAX_ANGULAR_SPEED)
+                    twist.angular.z = self.apply_velocity_limits(twist.angular.z, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED)
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
