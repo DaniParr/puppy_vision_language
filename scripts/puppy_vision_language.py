@@ -224,11 +224,20 @@ class PuppyVisionLanguageNode:
 
         # --- Shot 2: lying down ---
         self._execute_action("lie_down.d6ac")
+        
+        time_received = datetime.now()
+        
         rospy.sleep(settle)
+        
         with self._frame_lock:
+
+            while self.last_update_time >= time_received:
+                rospy.loginfo("Waiting for newer frame")
+
             if self._latest_frame is None:
                 rospy.logwarn("No frame available for lying down shot.")
                 return
+            
             frame_lie = self._latest_frame.copy()
 
         # --- Return to standing ---
