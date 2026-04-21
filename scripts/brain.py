@@ -32,7 +32,7 @@ import numpy as np
 
 # Configuration
 
-MODEL_ID       = "gemini-2.5-flash"
+MODEL_ID       = "gemini-2.5-flash-lite"
 MAX_TOKENS     = 512
 JPEG_QUALITY   = 75
 

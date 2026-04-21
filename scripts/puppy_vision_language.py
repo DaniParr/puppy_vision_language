@@ -127,7 +127,7 @@ class PuppyVisionLanguageNode:
             with self._frame_lock:
                 frame = self._latest_frame.copy()
                 self.scanned_frame = frame
-
+            
             if prompt == "scan":
                 summary = "debugging perception"
                 actions = [
@@ -157,13 +157,9 @@ class PuppyVisionLanguageNode:
                     rospy.loginfo("Stop event detected — aborting action sequence.")
                     break
 
-                file_name   = action.get("file_name")
+                file_name   = action.get("file_name", "")
                 action_type = action.get("action_type", "default")
                 description = action.get("description", "")
-
-                if not file_name:
-                    rospy.logwarn("Action missing file_name, skipping.")
-                    continue
 
                 rospy.loginfo(
                     "Dispatching — file: %s | type: %s | note: %s",
