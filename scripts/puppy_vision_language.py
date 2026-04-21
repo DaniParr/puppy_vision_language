@@ -20,7 +20,7 @@ STOP_KEYWORDS = [
 ]
 
 # Motion constants
-LINEAR_SPEED  = 0.2   # m/s
+LINEAR_SPEED  = 0.1   # m/s
 ANGULAR_SPEED = 0.5   # rad/s
 
 class PuppyVisionLanguageNode:
@@ -239,7 +239,7 @@ class PuppyVisionLanguageNode:
 
         duration = abs(meters) / LINEAR_SPEED
         twist     = Twist()
-        twist.linear.x = LINEAR_SPEED if meters >= 0 else -LINEAR_SPEED
+        twist.linear.x = 0.7 if meters >= 0 else -0.7
 
         rospy.loginfo(
             "Driving %s %.3f m (%.2f s)",
@@ -268,7 +268,7 @@ class PuppyVisionLanguageNode:
 
         duration = abs(radians) / ANGULAR_SPEED
         twist     = Twist()
-        twist.angular.z = ANGULAR_SPEED if radians >= 0 else -ANGULAR_SPEED
+        twist.angular.z = 1.0 if radians >= 0 else -1.0
 
         rospy.loginfo(
             "Rotating %s %.4f rad (%.2f s)",
