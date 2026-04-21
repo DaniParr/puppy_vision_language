@@ -1,6 +1,8 @@
 <launch>
 
-    <node pkg="puppy_vision_language" type="puppy_vision_language.py" name="puppy_vision_language.py" output="screen"> </node>
-    <node pkg="puppy_vision_language" type="puppy_mover.py" name="puppy_mover.py" output="screen"> </node>
+    <node pkg="puppy_vision_language" type="puppy_vision_language.py" name="puppy_vision_language" output="screen"> </node>
+    <node pkg="puppy_vision_language" type="puppy_mover.py" name="puppypi_direct_driver" output="screen"> </node>
+
+    <include file="$(find puppy_slam)/launch/hector.launch" />
 
 </launch>
