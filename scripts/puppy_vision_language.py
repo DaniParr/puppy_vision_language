@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import cv2
 import rospy
 import threading
 import numpy as np
@@ -35,6 +36,7 @@ class PuppyVisionLanguageNode:
 
         # Trackers
         self.last_image       = None
+        self.scanned_frame    = None
         self.last_update_time = datetime.now()
 
         # ROS interfacing attributes
@@ -116,6 +118,7 @@ class PuppyVisionLanguageNode:
 
             with self._frame_lock:
                 frame = self._latest_frame.copy()
+                self.scanned_frame = frame
 
             summary, actions = self.brain.send_request(prompt, frame)
 
@@ -201,10 +204,17 @@ class PuppyVisionLanguageNode:
         self._execute_action(file_name)
 
         with self._frame_lock:
-            if self._latest_frame is None:
+            if self.scanned_frame is None:
                 rospy.logwarn("No frame available to annotate.")
                 return
-            frame = self._latest_frame.copy()
+            frame = self.scanned_frame
+
+        # Get pixel centers
+        frame_h, frame_w = frame.shape[:2]
+        cx = cx * frame_w
+        cy = cy * frame_h
+        w = w * frame_w
+        h = h * frame_h
 
         # Convert center/size to top-left corner for cv2
         x1 = int(cx - w / 2)

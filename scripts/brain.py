@@ -111,28 +111,28 @@ TOOLS = [
                                         "type": "number",
                                         "description": (
                                             "[scan only] Horizontal center of the object of interest "
-                                            "in image pixel coordinates."
+                                            "between 0.0 and 1.0 of the image width."
                                         ),
                                     },
                                     "scan_center_y": {
                                         "type": "number",
                                         "description": (
                                             "[scan only] Vertical center of the object of interest "
-                                            "in image pixel coordinates."
+                                            "between 0.0 and 1.0 of the image height."
                                         ),
                                     },
                                     "scan_width": {
                                         "type": "number",
                                         "description": (
                                             "[scan only] Width of the bounding box around the "
-                                            "object of interest in pixels."
+                                            "between 0.0 and 1.0 of the image width."
                                         ),
                                     },
                                     "scan_height": {
                                         "type": "number",
                                         "description": (
                                             "[scan only] Height of the bounding box around the "
-                                            "object of interest in pixels."
+                                            "between 0.0 and 1.0 of the image height."
                                         ),
                                     },
 
