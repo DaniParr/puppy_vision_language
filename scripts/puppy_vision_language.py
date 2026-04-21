@@ -145,6 +145,8 @@ class PuppyVisionLanguageNode:
 
             if not actions:
                 rospy.logwarn("No actions returned from brain.")
+                self._execute_action("shake_head.d6ac")
+                self._execute_action("stand.d6ac")
                 return
 
             rospy.loginfo("Summary: %s | %d action(s)", summary, len(actions))
@@ -280,8 +282,8 @@ class PuppyVisionLanguageNode:
         # Filter keypoints to those inside or near the bounding box
         roi_kps = [
             kp for kp in kps
-            if (cx_px - MARGIN) <= kp.pt[0] <= (cx_px + MARGIN)
-            and (cy_px - MARGIN) <= kp.pt[1] <= (cy_px + MARGIN)
+            if (cx_px - w_px / 2) <= kp.pt[0] <= (cx_px + w_px / 2)
+            and (cy_px - h_px / 2) <= kp.pt[1] <= (cy_px + h_px / 2)
         ]
 
         if not roi_kps:

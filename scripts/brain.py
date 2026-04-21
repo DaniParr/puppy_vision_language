@@ -186,11 +186,12 @@ class Brain:
             os.environ.get("GEMINI_API_KEY_0"),
             os.environ.get("GEMINI_API_KEY_1"),
             os.environ.get("GEMINI_API_KEY_2"),
+            os.environ.get("GEMINI_API_KEY_3"),
         ]
 
         # Check if all API keys exist
         if not any(self._api_keys):
-            rospy.logfatal("GEMINI_API_KEY_0, GEMINI_API_KEY_1, and GEMINI_API_KEY_2 environment variables not set. Exiting now.")
+            rospy.logfatal("GEMINI_API_KEY_0, GEMINI_API_KEY_1,GEMINI_API_KEY_2, and GEMINI_API_KEY_3 environment variables not set. Exiting now.")
             raise SystemExit(1)
 
         # Set up API
