@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.02    # meters — goal point placed well short of target
+        self.STOP_DISTANCE = 0.20    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -27,8 +27,8 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.02   # meters — accept goal within 15cm radius
-        self.YAW_TOLERANCE = 0.3    # radians
+        self.DIST_TOLERANCE = 0.15   # meters — accept goal within 15cm radius
+        self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
@@ -278,9 +278,12 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
-            # Phase 3: At the destination — rotate to final goal_yaw if explicitly requested
+            # Phase 3: At the destination — rotate to correct any yaw drift.
+            # Always corrects heading: either to the explicitly requested radian_z
+            # or back to the approach_yaw captured at command time, which fixes
+            # gait-induced yaw drift even on pure forward moves.
             else:
-                if self.has_explicit_yaw and abs(final_yaw_error) > self.YAW_TOLERANCE:
+                if abs(final_yaw_error) > self.YAW_TOLERANCE:
                     velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
