@@ -8,7 +8,7 @@ from cv_bridge import CvBridge
 from puppy_control.msg import Pose
 from puppy_control.srv import SetRunActionName
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point
 from std_msgs.msg import String
 
 from brain import Brain
@@ -57,7 +57,7 @@ class PuppyVisionLanguageNode:
 
         # Publishers
         self._pose_pub = rospy.Publisher("/puppy_control/pose", Pose, queue_size=10)
-        self._vel_pub  = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
+        self._vel_pub  = rospy.Publisher("/puppy_move", Point, queue_size=10)
 
         # Service Proxies
         self._action_service = rospy.ServiceProxy("/puppy_control/runActionGroup", SetRunActionName)
@@ -140,6 +140,27 @@ class PuppyVisionLanguageNode:
                         "scan_height": 0.25,
                     }
                 ]
+            
+            elif prompt == "move":
+                summary = "moving 1 meter forward"
+                actions = [
+                    {
+                        "file_name": "move",
+                        "action_type": "move",
+                        "move_meters": 1.0,
+                    }
+                ]
+            
+            elif prompt == "rotate":
+                summary = "rotating 90 degrees CW"
+                actions = [
+                    {
+                        "file_name": "rotate",
+                        "action_type": "rotate",
+                        "rotate_radians": -1 * np.pi / 2,
+                    }
+                ]
+            
             else:
                 summary, actions = self.brain.send_request(prompt, frame)
 
@@ -355,9 +376,12 @@ class PuppyVisionLanguageNode:
         if self._stop_event.is_set():
             return
 
-        duration = abs(meters) / LINEAR_SPEED
-        twist     = Twist()
-        twist.linear.x = 0.7 if meters >= 0 else -0.7
+        move     = Point()
+        move.x   = meters 
+        
+        self._vel_pub.publish(move)
+        
+        return
 
         rospy.loginfo(
             "Driving %s %.3f m (%.2f s)",
@@ -369,7 +393,7 @@ class PuppyVisionLanguageNode:
         while (rospy.Time.now() - start).to_sec() < duration:
             if self._stop_event.is_set():
                 break
-            self._vel_pub.publish(twist)
+            self._vel_pub.publish(move)
             rate.sleep()
 
         self._publish_zero_velocity()
@@ -385,8 +409,12 @@ class PuppyVisionLanguageNode:
             return
 
         duration = abs(radians) / ANGULAR_SPEED
-        twist     = Twist()
-        twist.angular.z = 1.0 if radians >= 0 else -1.0
+        move     = Point()
+        move.z   = radians
+        
+        self._vel_pub.publish(move)
+
+        return
 
         rospy.loginfo(
             "Rotating %s %.4f rad (%.2f s)",
@@ -398,7 +426,7 @@ class PuppyVisionLanguageNode:
         while (rospy.Time.now() - start).to_sec() < duration:
             if self._stop_event.is_set():
                 break
-            self._vel_pub.publish(twist)
+            self._vel_pub.publish(move)
             rate.sleep()
 
         self._publish_zero_velocity()
@@ -408,8 +436,8 @@ class PuppyVisionLanguageNode:
     # ------------------------------------------------------------------
 
     def _publish_zero_velocity(self) -> None:
-        """Publish a zero Twist to halt all motion."""
-        self._vel_pub.publish(Twist())
+        """Publish a zero Point to halt all motion."""
+        self._vel_pub.publish(Point())
 
 
 if __name__ == "__main__":

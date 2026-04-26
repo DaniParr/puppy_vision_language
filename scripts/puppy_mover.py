@@ -29,7 +29,7 @@ class PuppyPiDirectDriver:
         
         # Tolerances
         self.DIST_TOLERANCE = 0.05 
-        self.YAW_TOLERANCE = 0.15    
+        self.YAW_TOLERANCE = 0.08    
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
@@ -257,7 +257,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
-               #     velocity.x = self.COMP_X_FORWARD
+                    #velocity.x = abs(velocity.yaw_rate) * 20
 
                 # Phase 2: Walk toward goal.
                 else:
@@ -291,7 +291,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
-                #    velocity.x = self.COMP_X_FORWARD
+                    velocity.x = abs(velocity.yaw_rate) * 25
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
