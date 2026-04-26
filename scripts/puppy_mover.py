@@ -11,23 +11,23 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = .01
+        self.STOP_DISTANCE = .3
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
         # Velocity Limits
-        self.MAX_LINEAR_SPEED = 0.3
+        self.MAX_LINEAR_SPEED = 15
         self.MAX_ANGULAR_SPEED = 0.5
         
-        self.MIN_LINEAR_SPEED = 0.1
+        self.MIN_LINEAR_SPEED = 7
         self.MIN_ANGULAR_SPEED = 0.2 
         # Proportional Control Gains
-        self.K_LINEAR = 0.5
+        self.K_LINEAR = 50.0
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.01   # meters
-        self.YAW_TOLERANCE = 0.01    # radians
+        self.DIST_TOLERANCE = 0.15   # meters
+        self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
@@ -202,6 +202,14 @@ class PuppyPiDirectDriver:
             blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
             blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
+
+            rospy.loginfo_throttle(
+                0.5,  # log at most every 0.5 seconds to avoid spam
+                "dist_err=%.3fm heading_err=%.2frad robot=(%.2f,%.2f) goal=(%.2f,%.2f)",
+                distance_error, heading_error,
+                self.robot_x, self.robot_y,
+                self.goal_x, self.goal_y
+            )
 
             velocity = Velocity()
 
