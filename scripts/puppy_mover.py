@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.05    # meters — goal point placed well short of target
+        self.STOP_DISTANCE = 0.01    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -27,7 +27,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.08   # meters — accept goal within 15cm radius
+        self.DIST_TOLERANCE = 0.05   # meters — accept goal within 15cm radius
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
@@ -147,7 +147,7 @@ class PuppyPiDirectDriver:
         # Scale stop buffer to 20% of total distance, capped at STOP_DISTANCE.
         # This prevents short commands (e.g. 0.3m) from having their entire
         # travel distance consumed by a fixed stop buffer.
-        stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
+        stop_dist = min(self.STOP_DISTANCE, total_distance * 0.1)
         travel_distance = total_distance - stop_dist
 
         approach_yaw = self.normalize_angle(self.robot_yaw + bearing_to_target)
