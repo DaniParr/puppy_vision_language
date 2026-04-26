@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.05     # meters — give the robot room to decelerate
+        self.STOP_DISTANCE = 0.08    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -23,12 +23,11 @@ class PuppyPiDirectDriver:
         self.MIN_ANGULAR_SPEED = 0.2
 
         # Proportional Control Gains
-        # K_LINEAR scaled to map meter distances to raw hardware speed units
         self.K_LINEAR = 50.0
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.01   # meters — reachable given hardware speed
+        self.DIST_TOLERANCE = 0.15   # meters — accept goal within 15cm radius
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
@@ -63,9 +62,9 @@ class PuppyPiDirectDriver:
         rospy.loginfo("Direct Driver Initialized. Waiting for targets...")
 
     def target_callback(self, msg):
-        depth_x = msg.x   # Forward depth distance to target (0 if not moving forward)
-        depth_y = msg.y   # Lateral depth distance to target (0 if no lateral offset)
-        radian_z = msg.z  # Desired final yaw offset (0 if no yaw correction needed)
+        depth_x = msg.x
+        depth_y = msg.y
+        radian_z = msg.z
         self.move_to_target(depth_x, depth_y, radian_z)
 
     def pose_callback(self, data):
@@ -95,15 +94,15 @@ class PuppyPiDirectDriver:
            Pure yaw rotation — robot stays in place and rotates by radian_z.
 
         2. Y only (x=0, y!=0):
-           Rotate in place to face the direction of atan2(y, 0+epsilon) — i.e. purely
-           sideways. The robot turns to face the target but does not drive forward.
-           If Z is also provided, that becomes the final resting yaw after turning.
+           Rotate in place to face the direction of atan2(y, 0+epsilon).
+           If Z is also provided, that becomes the final resting yaw.
 
         3. X (and optional Y) provided (x!=0):
-           - Compute the bearing to the target using atan2(y, x).
-           - Drive forward sqrt(x²+y²) - STOP_DISTANCE along that bearing.
-           - If Z is also provided, rotate to that final yaw once the destination
-             is reached. Otherwise hold the approach heading as the final yaw.
+           Drive forward sqrt(x²+y²) - stop_dist along the bearing atan2(y, x),
+           where stop_dist = min(STOP_DISTANCE, total_distance * 0.2) so that
+           short commands still have meaningful travel distance.
+           If Z is also provided, rotate to that final yaw once the destination
+           is reached. Otherwise hold the approach heading as the final yaw.
         """
 
         # --- CASE 1: Pure yaw rotation (x=0, y=0, z!=0) ---
@@ -145,7 +144,11 @@ class PuppyPiDirectDriver:
         # --- CASE 3: Drive toward target (x!=0, y optional) ---
         bearing_to_target = math.atan2(depth_y, depth_x)
         total_distance = math.sqrt(depth_x**2 + depth_y**2)
-        travel_distance = total_distance - self.STOP_DISTANCE
+        # Scale stop buffer to 20% of total distance, capped at STOP_DISTANCE.
+        # This prevents short commands (e.g. 0.3m) from having their entire
+        # travel distance consumed by a fixed stop buffer.
+        stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
+        travel_distance = total_distance - stop_dist
 
         approach_yaw = self.normalize_angle(self.robot_yaw + bearing_to_target)
 
@@ -203,9 +206,8 @@ class PuppyPiDirectDriver:
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
             blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
 
-            # Debug: log distance and heading so you can monitor convergence
             rospy.loginfo_throttle(
-                0.5,  # log at most every 0.5 seconds to avoid spam
+                0.5,
                 "dist_err=%.3fm heading_err=%.2frad robot=(%.2f,%.2f) goal=(%.2f,%.2f)",
                 distance_error, heading_error,
                 self.robot_x, self.robot_y,
@@ -215,16 +217,13 @@ class PuppyPiDirectDriver:
             velocity = Velocity()
 
             # Phase 1: Severely off-course — pure pivot, no forward motion
-            # Only triggers for large heading errors (> 90°) so the robot
-            # doesn't waste time stopping and rotating for small corrections.
             if distance_error > self.DIST_TOLERANCE and abs(heading_error) > math.pi / 2:
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
-            # Phase 2: Walk forward while correcting heading simultaneously.
-            # Covers both well-aligned approaches and moderate heading errors.
+            # Phase 2: Walk forward while correcting heading simultaneously
             elif distance_error > self.DIST_TOLERANCE:
                 linear_speed = self.K_LINEAR * distance_error
                 linear_speed = self.apply_velocity_limits(
@@ -248,7 +247,7 @@ class PuppyPiDirectDriver:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
                     self.stop_robot()
-                    continue  # stop_robot already published, skip publish_velocity below
+                    continue
 
             self.publish_velocity(velocity)
             self.RATE.sleep()
