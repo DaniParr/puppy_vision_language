@@ -55,12 +55,12 @@ class PuppyPiDirectDriver:
         self.target_sub = rospy.Subscriber('/puppy_move', Point, self.target_callback)
         self.pup_velocity_pub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=10)
         self.pup_pose_pub = rospy.Publisher('/puppy_control/pose', Pose, queue_size=10)
+        self.pup_pose_pub.publish(STAND)
 
         rospy.on_shutdown(self.stop_robot)
         rospy.loginfo("Direct Driver Initialized. Waiting for targets...")
 
     def target_callback(self, msg):
-        self.pup_pose_pub.publish(Pose(STAND))
         depth_x = msg.x   # Forward depth distance to target (0 if not moving forward)
         depth_y = msg.y   # Lateral depth distance to target (0 if no lateral offset)
         radian_z = msg.z  # Desired final yaw offset (0 if no yaw correction needed)
