@@ -28,7 +28,7 @@ class PuppyPiDirectDriver:
         
         # Tolerances
         self.DIST_TOLERANCE = 0.05 
-        self.YAW_TOLERANCE = 0.2    # radians
+        self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
