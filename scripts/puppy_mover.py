@@ -19,7 +19,7 @@ class PuppyPiDirectDriver:
         self.MAX_LINEAR_SPEED = 15
         self.MAX_ANGULAR_SPEED = 0.5
         
-        self.MIN_LINEAR_SPEED = 3
+        self.MIN_LINEAR_SPEED = 7
         self.MIN_ANGULAR_SPEED = 0.2
 
         # Proportional Control Gains
