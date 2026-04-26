@@ -36,15 +36,17 @@ class PuppyPiDirectDriver:
         self.robot_y = 0.0
         self.robot_yaw = 0.0
         
-        STAND = Pose()
-        STAND.roll = math.radians(0)
-        STAND.pitch = math.radians(0)
-        STAND.yaw = 0.000
-        STAND.height = -10
-        STAND.x_shift = 0.4
-        STAND.stance_x = 0
-        STAND.stance_y = 0
-        STAND.run_time = 2
+        self.STAND = Pose()
+        self.STAND.roll = math.radians(0)
+        self.STAND.pitch = math.radians(0)
+        self.STAND.yaw = 0.000
+        self.STAND.height = -10
+        self.STAND.x_shift = 0.4
+        self.STAND.stance_x = 0
+        self.STAND.stance_y = 0
+        self.STAND.run_time = 3
+        
+        self.did_stand = False
 
         # Goal State
         self.has_goal = False
@@ -64,14 +66,17 @@ class PuppyPiDirectDriver:
         self.target_sub = rospy.Subscriber('/puppy_move', Point, self.target_callback)
         self.pup_velocity_pub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=10)
         self.pup_pose_pub = rospy.Publisher('/puppy_control/pose', Pose, queue_size=10)
-        self.pup_pose_pub.publish(STAND)
 
         rospy.on_shutdown(self.stop_robot)
         rospy.loginfo("Direct Driver Initialized. Waiting for targets...")
 
     def target_callback(self, msg):
+        if not self.did_stand:
+            self.pup_pose_pub.publish(self.STAND)
+            self.did_stand = True
+        
         depth_x = msg.x
-        depth_y = msg.y
+        depth_y = -msg.y
         radian_z = msg.z
         self.move_to_target(depth_x, depth_y, radian_z)
 
@@ -97,7 +102,10 @@ class PuppyPiDirectDriver:
         # --- CASE 1: Pure yaw rotation (x=0, y=0, z!=0) ---
         if depth_x == 0.0 and depth_y == 0.0:
             if radian_z == 0.0:
-                rospy.logwarn("Received empty goal (x=0, y=0, z=0). Ignoring.")
+                rospy.logwarn("Received empty goal (x=0, y=0, z=0). Ending all movement.")
+                self.has_goal = False
+                self.position_reached = False 
+                self.stop_robot()
                 return
 
             self.goal_x = self.robot_x
@@ -257,7 +265,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
-                    #velocity.x = abs(velocity.yaw_rate) * 20
+                    velocity.x = abs(velocity.yaw_rate) * 25
 
                 # Phase 2: Walk toward goal.
                 else:

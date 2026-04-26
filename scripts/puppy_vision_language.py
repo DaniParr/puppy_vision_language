@@ -83,12 +83,11 @@ class PuppyVisionLanguageNode:
         prompt        = msg.data
         time_received = datetime.now()
 
-        if self._executing:
-            if any(word in prompt.lower() for word in STOP_KEYWORDS):
-                rospy.loginfo("Stop keyword detected — interrupting current sequence.")
-                self._stop_event.set()
-                self._publish_zero_velocity()
-                self._executing = False
+        if any(word in prompt.lower() for word in STOP_KEYWORDS):
+            rospy.loginfo("Stop keyword detected — interrupting current sequence.")
+            self._stop_event.set()
+            self._publish_zero_velocity()
+            self._executing = False
             return
 
         # Kick off execution in a background thread so the callback returns immediately
@@ -127,13 +126,14 @@ class PuppyVisionLanguageNode:
             with self._frame_lock:
                 frame = self._latest_frame.copy()
                 self.scanned_frame = frame
-            
+           
+            # Controller debugging commands
             if prompt == "scan":
                 summary = "debugging perception"
                 actions = [
                     {
-                        "file_name": "scan",
-                        "action_type": "scan",
+                        "file_name": "move_to_object",
+                        "action_type": "move_to_object",
                         "scan_center_x": 0.5,
                         "scan_center_y": 0.5,
                         "scan_width": 0.25,
@@ -187,7 +187,7 @@ class PuppyVisionLanguageNode:
                     file_name, action_type, description,
                 )
 
-                if action_type == "scan":
+                if action_type == "scan" or action_type == "move_to_object":
                     cx = action.get("scan_center_x")
                     cy = action.get("scan_center_y")
                     w  = action.get("scan_width")
@@ -195,7 +195,7 @@ class PuppyVisionLanguageNode:
                     if None in (cx, cy, w, h):
                         rospy.logwarn("Scan action missing bounding box fields, skipping.")
                         continue
-                    self._execute_scan(file_name, cx, cy, w, h)
+                    self._execute_scan(file_name, cx, cy, w, h, action_type == "move_to_object")
 
                 elif action_type == "move":
                     meters = action.get("move_meters")
@@ -233,8 +233,9 @@ class PuppyVisionLanguageNode:
             self._action_service(file_name, 1)
         except rospy.ServiceException as exc:
             rospy.logerr("Action service call failed for '%s': %s", file_name, exc)
+        self._action_service("stand.d6ac", 1)
 
-    def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float) -> None:
+    def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float, move: bool = False) -> None:
         """
         Play the action file, capture two frames at different heights to estimate
         depth via vertical disparity, then save the annotated image.
@@ -366,6 +367,23 @@ class PuppyVisionLanguageNode:
         cv2.imwrite(save_path, annotated)
         rospy.loginfo("Scan image saved to: %s", save_path)
 
+        if move:
+            
+            if depth_m == float("inf"):
+                rospy.logwarn("Refuse to move without disparity...")
+
+            f_x = float(CAMERA_INTRINSIC[0, 0])
+            c_x = float(CAMERA_INTRINSIC[0, 2])
+            lateral_m = ((cx_px - c_x) / f_x) * depth_m
+            rospy.loginfo(f"Moving {depth_m} meters forward, {lateral_m} meters laterally...")
+
+            move = Point()
+            move.x = depth_m * np.cos(np.arcsin(lateral_m / depth_m)) 
+            move.y = lateral_m
+
+            self._vel_pub.publish(move)
+
+
     def _execute_move(self, file_name: str, meters: float) -> None:
         """
         Play the action file, then drive forward/backward the requested distance
@@ -382,21 +400,6 @@ class PuppyVisionLanguageNode:
         self._vel_pub.publish(move)
         
         return
-
-        rospy.loginfo(
-            "Driving %s %.3f m (%.2f s)",
-            "forward" if meters >= 0 else "backward", abs(meters), duration,
-        )
-
-        start = rospy.Time.now()
-        rate  = rospy.Rate(20)
-        while (rospy.Time.now() - start).to_sec() < duration:
-            if self._stop_event.is_set():
-                break
-            self._vel_pub.publish(move)
-            rate.sleep()
-
-        self._publish_zero_velocity()
 
     def _execute_rotate(self, file_name: str, radians: float) -> None:
         """
@@ -416,20 +419,6 @@ class PuppyVisionLanguageNode:
 
         return
 
-        rospy.loginfo(
-            "Rotating %s %.4f rad (%.2f s)",
-            "CCW" if radians >= 0 else "CW", abs(radians), duration,
-        )
-
-        start = rospy.Time.now()
-        rate  = rospy.Rate(20)
-        while (rospy.Time.now() - start).to_sec() < duration:
-            if self._stop_event.is_set():
-                break
-            self._vel_pub.publish(move)
-            rate.sleep()
-
-        self._publish_zero_velocity()
 
     # ------------------------------------------------------------------
     # Helpers
