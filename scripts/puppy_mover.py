@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.05
+        self.STOP_DISTANCE = 0.05     # meters — give the robot room to decelerate
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -214,14 +214,17 @@ class PuppyPiDirectDriver:
 
             velocity = Velocity()
 
-            # Phase 1: Not facing the target direction — pivot first
-            if distance_error > self.DIST_TOLERANCE and abs(heading_error) > 0.2:
+            # Phase 1: Severely off-course — pure pivot, no forward motion
+            # Only triggers for large heading errors (> 90°) so the robot
+            # doesn't waste time stopping and rotating for small corrections.
+            if distance_error > self.DIST_TOLERANCE and abs(heading_error) > math.pi / 2:
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
-            # Phase 2: Facing the target — walk forward while correcting heading
+            # Phase 2: Walk forward while correcting heading simultaneously.
+            # Covers both well-aligned approaches and moderate heading errors.
             elif distance_error > self.DIST_TOLERANCE:
                 linear_speed = self.K_LINEAR * distance_error
                 linear_speed = self.apply_velocity_limits(
