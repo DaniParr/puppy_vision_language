@@ -2,6 +2,8 @@ import speech_recognition as sr
 import sys
 import re
 
+#import rospy
+
 def parse_and_print(text):
     pattern = r"(move|moved|go|drive|head)\s+(towards|toward|to)\s+(.*)"
     match = re.search(pattern, text)
@@ -20,6 +22,29 @@ def parse_and_print(text):
     else:
         # Updated to print the exact phrase that failed the regex pattern
         print(f"  -> NO MATCH: '{text}' did not contain a valid movement command.")
+
+"""
+class VoiceCommand:
+
+    def _init_(self):
+
+        rospy.init_node('puppypi_direct_driver', anonymous=True)
+
+        #Publishers
+        # From puppy_vision_language. Used to subscribe to the prompt to tell command to puppy robot
+        self._prompt_pub = rospy.Publisher("/prompt", String, queue_size=10)
+
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.recognizer.pause_threshold = 1.5
+
+        rospy.loginfo("Calibrating microphone for ambient noise... please wait.")
+        with self.microphone as source:
+            self.recognizer.adjust_for_ambient_noise(source, duration=2.0)
+        rospy.loginfo("Calibration complete! Ready to listen.")
+
+"""
+
 
 
 def main():
