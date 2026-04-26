@@ -208,7 +208,7 @@ class PuppyPiDirectDriver:
         
         # Distance at which we stop steering toward the specific X/Y point 
         # and just lock our heading to coast in smoothly.
-        COAST_DISTANCE = 0.20 
+        COAST_DISTANCE = 0.08 
         
         while not rospy.is_shutdown():
             if not self.has_goal:
