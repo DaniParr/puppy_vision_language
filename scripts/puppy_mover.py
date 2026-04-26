@@ -11,22 +11,24 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = .01
+        self.STOP_DISTANCE = 0.05
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
-        # Velocity Limits
+        # Velocity Limits (raw hardware units)
         self.MAX_LINEAR_SPEED = 15
         self.MAX_ANGULAR_SPEED = 0.5
         
         self.MIN_LINEAR_SPEED = 7
-        self.MIN_ANGULAR_SPEED = 0.2 
+        self.MIN_ANGULAR_SPEED = 0.2
+
         # Proportional Control Gains
+        # K_LINEAR scaled to map meter distances to raw hardware speed units
         self.K_LINEAR = 50.0
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.15   # meters
+        self.DIST_TOLERANCE = 0.15   # meters — reachable given hardware speed
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
@@ -67,10 +69,8 @@ class PuppyPiDirectDriver:
         self.move_to_target(depth_x, depth_y, radian_z)
 
     def pose_callback(self, data):
-        # NOTE: if the robot walks backwards, negate robot_x and robot_y here
-        # to correct an inverted SLAM coordinate frame.
-        self.robot_x = -data.pose.position.x
-        self.robot_y = -data.pose.position.y
+        self.robot_x = data.pose.position.x
+        self.robot_y = data.pose.position.y
         orientation_list = [
             data.pose.orientation.x, data.pose.orientation.y,
             data.pose.orientation.z, data.pose.orientation.w
@@ -203,6 +203,7 @@ class PuppyPiDirectDriver:
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
             blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
 
+            # Debug: log distance and heading so you can monitor convergence
             rospy.loginfo_throttle(
                 0.5,  # log at most every 0.5 seconds to avoid spam
                 "dist_err=%.3fm heading_err=%.2frad robot=(%.2f,%.2f) goal=(%.2f,%.2f)",
@@ -226,7 +227,7 @@ class PuppyPiDirectDriver:
                 linear_speed = self.apply_velocity_limits(
                     linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
                 )
-                velocity.x = linear_speed  # positive = forward; inversion handled in publish_velocity
+                velocity.x = linear_speed
 
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
