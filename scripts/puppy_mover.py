@@ -28,7 +28,7 @@ class PuppyPiDirectDriver:
         
         # Tolerances
         self.DIST_TOLERANCE = 0.09   # meters — accept goal within 15cm radius
-        self.YAW_TOLERANCE = 0.05    # radians
+        self.YAW_TOLERANCE = 0.5    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
