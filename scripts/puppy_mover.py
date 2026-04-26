@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.03    # meters — goal point placed well short of target
+        self.STOP_DISTANCE = 0.05    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -27,8 +27,8 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.03   # meters — accept goal within 15cm radius
-        self.YAW_TOLERANCE = 0.5    # radians
+        self.DIST_TOLERANCE = 0.05   # meters — accept goal within 15cm radius
+        self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
@@ -50,6 +50,7 @@ class PuppyPiDirectDriver:
         self.goal_x = 0.0
         self.goal_y = 0.0
         self.goal_yaw = 0.0
+        self.has_explicit_yaw = False  # True only when radian_z was provided
 
         # --- ROS INTERFACES ---
         self.pose_sub = rospy.Subscriber('/slam_out_pose', PoseStamped, self.pose_callback)
@@ -119,6 +120,7 @@ class PuppyPiDirectDriver:
                 "CASE 1 — Pure yaw: rotate %.2f rad → target yaw %.2f rad (%.1f°)",
                 radian_z, self.goal_yaw, math.degrees(self.goal_yaw)
             )
+            self.has_explicit_yaw = True
             self.has_goal = True
             return
 
@@ -138,6 +140,7 @@ class PuppyPiDirectDriver:
                 "CASE 2 — Turn to face: bearing %.2f rad, goal yaw %.2f rad (%.1f°)",
                 bearing_to_target, self.goal_yaw, math.degrees(self.goal_yaw)
             )
+            self.has_explicit_yaw = True  # Case 2 always rotates to a specific yaw
             self.has_goal = True
             return
 
@@ -153,6 +156,7 @@ class PuppyPiDirectDriver:
             self.goal_yaw = self.robot_yaw  # hold current heading throughout
             if radian_z != 0.0:
                 self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
+            self.has_explicit_yaw = (radian_z != 0.0)
             # Project goal directly behind the robot in the global frame
             reverse_bearing = self.normalize_angle(self.robot_yaw + math.pi)
             self.goal_x = self.robot_x + travel_distance * math.cos(reverse_bearing)
@@ -178,6 +182,7 @@ class PuppyPiDirectDriver:
             self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
         else:
             self.goal_yaw = approach_yaw
+        self.has_explicit_yaw = (radian_z != 0.0)
 
         if travel_distance <= self.DIST_TOLERANCE:
             rospy.loginfo("CASE 3 — Already within stop distance. Rotating to goal yaw only.")
@@ -224,9 +229,15 @@ class PuppyPiDirectDriver:
             heading_error = self.normalize_angle(angle_to_goal - self.robot_yaw)
 
             BLEND_START_DIST = 0.5
-            blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
+            # Only blend toward final_yaw_error if the caller explicitly requested
+            # a final heading. Without this, the blend causes the robot to curve
+            # during approach and increases distance_error near the goal.
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
-            blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
+            if self.has_explicit_yaw:
+                blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
+                blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
+            else:
+                blended_heading_error = heading_error  # pure point-tracking, no yaw blend
 
             rospy.loginfo_throttle(
                 0.5,
@@ -267,9 +278,9 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
-            # Phase 3: At the destination — rotate to final goal_yaw
+            # Phase 3: At the destination — rotate to final goal_yaw if explicitly requested
             else:
-                if abs(final_yaw_error) > self.YAW_TOLERANCE:
+                if self.has_explicit_yaw and abs(final_yaw_error) > self.YAW_TOLERANCE:
                     velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
