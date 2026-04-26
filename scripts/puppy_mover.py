@@ -27,7 +27,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.05   # meters — accept goal within 15cm radius
+        self.DIST_TOLERANCE = 0.05 
         self.YAW_TOLERANCE = 0.3    # radians
 
         # --- STATE VARIABLES ---
@@ -51,6 +51,9 @@ class PuppyPiDirectDriver:
         self.goal_y = 0.0
         self.goal_yaw = 0.0
         self.has_explicit_yaw = False  # True only when radian_z was provided
+        
+        # Latch to prevent tolerance chattering between phases
+        self.position_reached = False 
 
         # --- ROS INTERFACES ---
         self.pose_sub = rospy.Subscriber('/slam_out_pose', PoseStamped, self.pose_callback)
@@ -122,6 +125,7 @@ class PuppyPiDirectDriver:
             )
             self.has_explicit_yaw = True
             self.has_goal = True
+            self.position_reached = False
             return
 
         # --- CASE 2: Rotate in place to face target (x=0, y!=0) ---
@@ -142,6 +146,7 @@ class PuppyPiDirectDriver:
             )
             self.has_explicit_yaw = True  # Case 2 always rotates to a specific yaw
             self.has_goal = True
+            self.position_reached = False
             return
 
         # --- CASE 3: Drive toward target (x!=0, y optional) ---
@@ -166,6 +171,7 @@ class PuppyPiDirectDriver:
                 travel_distance, self.goal_x, self.goal_y
             )
             self.has_goal = True
+            self.position_reached = False
             return
 
         bearing_to_target = math.atan2(depth_y, depth_x)
@@ -189,6 +195,7 @@ class PuppyPiDirectDriver:
             self.goal_x = self.robot_x
             self.goal_y = self.robot_y
             self.has_goal = True
+            self.position_reached = False
             return
 
         global_bearing = self.normalize_angle(self.robot_yaw + bearing_to_target)
@@ -202,6 +209,7 @@ class PuppyPiDirectDriver:
             self.goal_yaw, math.degrees(self.goal_yaw)
         )
         self.has_goal = True
+        self.position_reached = False
 
     def normalize_angle(self, angle):
         """Keeps angles within the -pi to pi range."""
@@ -227,17 +235,11 @@ class PuppyPiDirectDriver:
 
             angle_to_goal = math.atan2(dy, dx)
             heading_error = self.normalize_angle(angle_to_goal - self.robot_yaw)
-
-            BLEND_START_DIST = 0.5
-            # Only blend toward final_yaw_error if the caller explicitly requested
-            # a final heading. Without this, the blend causes the robot to curve
-            # during approach and increases distance_error near the goal.
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
-            if self.has_explicit_yaw:
-                blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
-                blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
-            else:
-                blended_heading_error = heading_error  # pure point-tracking, no yaw blend
+
+            # REMOVED BLEND FUNCTION: 
+            # Always point directly at the goal coordinates until we actually arrive.
+            approach_heading_error = heading_error
 
             rospy.loginfo_throttle(
                 0.5,
@@ -249,40 +251,43 @@ class PuppyPiDirectDriver:
 
             velocity = Velocity()
 
+            # HYSTERESIS LOGIC:
+            # If we already made it to the goal, double the allowed tolerance. 
+            # This prevents the physical drift of turning in place from throwing 
+            # the robot back into Phase 2 (driving forward).
+            active_tolerance = self.DIST_TOLERANCE * 2.0 if self.position_reached else self.DIST_TOLERANCE
+
             # Phase 1: Severely off-course — pure pivot, no forward motion.
-            # Only triggers when the robot needs to turn more than 90° AND
-            # the goal is in front (positive x command). Reverse goals skip
-            # this phase entirely and are handled in Phase 2 with negative x.
-            if distance_error > self.DIST_TOLERANCE and abs(heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
-                velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
+            if distance_error > active_tolerance and abs(heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
+                self.position_reached = False
+                velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
             # Phase 2: Walk toward goal while correcting heading simultaneously.
-            # If the goal is behind the robot (heading_error > 90°) drive backward
-            # instead of turning around — this handles reverse commands.
-            elif distance_error > self.DIST_TOLERANCE:
+            elif distance_error > active_tolerance:
+                self.position_reached = False
                 linear_speed = self.K_LINEAR * distance_error
                 linear_speed = self.apply_velocity_limits(
                     linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
                 )
+                
                 # If goal is roughly behind us, drive backward
                 if abs(heading_error) > math.pi / 2:
                     velocity.x = -linear_speed
                 else:
                     velocity.x = linear_speed
 
-                velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
+                velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
             # Phase 3: At the destination — rotate to correct any yaw drift.
-            # Always corrects heading: either to the explicitly requested radian_z
-            # or back to the approach_yaw captured at command time, which fixes
-            # gait-induced yaw drift even on pure forward moves.
             else:
+                self.position_reached = True # Latch the state! We made it to the XY coords.
+                
                 if abs(final_yaw_error) > self.YAW_TOLERANCE:
                     velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
                     velocity.yaw_rate = self.apply_velocity_limits(
@@ -291,6 +296,7 @@ class PuppyPiDirectDriver:
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
+                    self.position_reached = False
                     self.stop_robot()
                     continue
 
