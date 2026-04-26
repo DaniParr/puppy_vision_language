@@ -28,7 +28,8 @@ class PuppyPiDirectDriver:
         
         # Tolerances
         self.DIST_TOLERANCE = 0.05 
-        self.YAW_TOLERANCE = 0.05    # radians
+        # Bumped to 0.15 (8.5 deg) so the walking wobble doesn't prevent completion
+        self.YAW_TOLERANCE = 0.15    
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
@@ -54,6 +55,9 @@ class PuppyPiDirectDriver:
         
         # Latch to prevent tolerance chattering between phases
         self.position_reached = False 
+        
+        # Latch to prevent dynamically flipping gears and spiraling
+        self.is_forward_move = True
 
         # --- ROS INTERFACES ---
         self.pose_sub = rospy.Subscriber('/slam_out_pose', PoseStamped, self.pose_callback)
@@ -82,7 +86,6 @@ class PuppyPiDirectDriver:
         self.robot_yaw = yaw
 
     def apply_velocity_limits(self, velocity, max_speed, min_speed):
-        """Clamps to max, and if non-zero, enforces a minimum so the hardware actually moves."""
         if velocity == 0.0:
             return 0.0
         clamped = max(min(velocity, max_speed), -max_speed)
@@ -91,24 +94,6 @@ class PuppyPiDirectDriver:
         return clamped
 
     def move_to_target(self, depth_x, depth_y, radian_z):
-        """
-        Three behaviours based on inputs:
-
-        1. Z only (x=0, y=0, z!=0):
-           Pure yaw rotation — robot stays in place and rotates by radian_z.
-
-        2. Y only (x=0, y!=0):
-           Rotate in place to face the direction of atan2(y, 0+epsilon).
-           If Z is also provided, that becomes the final resting yaw.
-
-        3. X (and optional Y) provided (x!=0):
-           Drive forward sqrt(x²+y²) - stop_dist along the bearing atan2(y, x),
-           where stop_dist = min(STOP_DISTANCE, total_distance * 0.2) so that
-           short commands still have meaningful travel distance.
-           If Z is also provided, rotate to that final yaw once the destination
-           is reached. Otherwise hold the approach heading as the final yaw.
-        """
-
         # --- CASE 1: Pure yaw rotation (x=0, y=0, z!=0) ---
         if depth_x == 0.0 and depth_y == 0.0:
             if radian_z == 0.0:
@@ -126,6 +111,7 @@ class PuppyPiDirectDriver:
             self.has_explicit_yaw = True
             self.has_goal = True
             self.position_reached = False
+            self.is_forward_move = True
             return
 
         # --- CASE 2: Rotate in place to face target (x=0, y!=0) ---
@@ -144,25 +130,23 @@ class PuppyPiDirectDriver:
                 "CASE 2 — Turn to face: bearing %.2f rad, goal yaw %.2f rad (%.1f°)",
                 bearing_to_target, self.goal_yaw, math.degrees(self.goal_yaw)
             )
-            self.has_explicit_yaw = True  # Case 2 always rotates to a specific yaw
+            self.has_explicit_yaw = True  
             self.has_goal = True
             self.position_reached = False
+            self.is_forward_move = True
             return
 
         # --- CASE 3: Drive toward target (x!=0, y optional) ---
 
-        # --- CASE 3R: Reverse — negative x means drive straight backward ---
-        # Skip bearing/pivot logic entirely; project the goal directly behind
-        # the robot so it walks backward without turning around.
+        # --- CASE 3R: Reverse ---
         if depth_x < 0.0:
             total_distance = abs(depth_x)
             stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
             travel_distance = total_distance - stop_dist
-            self.goal_yaw = self.robot_yaw  # hold current heading throughout
+            self.goal_yaw = self.robot_yaw  
             if radian_z != 0.0:
                 self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
             self.has_explicit_yaw = (radian_z != 0.0)
-            # Project goal directly behind the robot in the global frame
             reverse_bearing = self.normalize_angle(self.robot_yaw + math.pi)
             self.goal_x = self.robot_x + travel_distance * math.cos(reverse_bearing)
             self.goal_y = self.robot_y + travel_distance * math.sin(reverse_bearing)
@@ -172,13 +156,11 @@ class PuppyPiDirectDriver:
             )
             self.has_goal = True
             self.position_reached = False
+            self.is_forward_move = False # Lock reverse gear
             return
 
         bearing_to_target = math.atan2(depth_y, depth_x)
         total_distance = math.sqrt(depth_x**2 + depth_y**2)
-        # Scale stop buffer to 20% of total distance, capped at STOP_DISTANCE.
-        # This prevents short commands (e.g. 0.3m) from having their entire
-        # travel distance consumed by a fixed stop buffer.
         stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
         travel_distance = total_distance - stop_dist
 
@@ -196,6 +178,7 @@ class PuppyPiDirectDriver:
             self.goal_y = self.robot_y
             self.has_goal = True
             self.position_reached = False
+            self.is_forward_move = True
             return
 
         global_bearing = self.normalize_angle(self.robot_yaw + bearing_to_target)
@@ -210,13 +193,12 @@ class PuppyPiDirectDriver:
         )
         self.has_goal = True
         self.position_reached = False
+        self.is_forward_move = True # Lock forward gear
 
     def normalize_angle(self, angle):
-        """Keeps angles within the -pi to pi range."""
         return math.atan2(math.sin(angle), math.cos(angle))
 
     def publish_velocity(self, velocity):
-        """Single publish boundary for all velocity commands."""
         self.pup_velocity_pub.publish(velocity)
 
     def stop_robot(self):
@@ -237,9 +219,14 @@ class PuppyPiDirectDriver:
             heading_error = self.normalize_angle(angle_to_goal - self.robot_yaw)
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
 
-            # REMOVED BLEND FUNCTION: 
-            # Always point directly at the goal coordinates until we actually arrive.
-            approach_heading_error = heading_error
+            # --- CRITICAL FIX 1: Orient properly for Reverse vs Forward ---
+            if self.is_forward_move:
+                driving_heading_error = heading_error
+            else:
+                # If driving backwards, we want the tail to track the goal
+                driving_heading_error = self.normalize_angle(heading_error + math.pi)
+
+            approach_heading_error = driving_heading_error
 
             rospy.loginfo_throttle(
                 0.5,
@@ -250,15 +237,10 @@ class PuppyPiDirectDriver:
             )
 
             velocity = Velocity()
-
-            # HYSTERESIS LOGIC:
-            # If we already made it to the goal, double the allowed tolerance. 
-            # This prevents the physical drift of turning in place from throwing 
-            # the robot back into Phase 2 (driving forward).
             active_tolerance = self.DIST_TOLERANCE * 2.0 if self.position_reached else self.DIST_TOLERANCE
 
             # Phase 1: Severely off-course — pure pivot, no forward motion.
-            if distance_error > active_tolerance and abs(heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
+            if distance_error > active_tolerance and abs(driving_heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
                 self.position_reached = False
                 velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
@@ -273,20 +255,29 @@ class PuppyPiDirectDriver:
                     linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
                 )
                 
-                # If goal is roughly behind us, drive backward
-                if abs(heading_error) > math.pi / 2:
-                    velocity.x = -linear_speed
-                else:
+                # --- CRITICAL FIX 2: Locked Gear ---
+                # We no longer dynamically switch gears based on heading_error. 
+                # This stops the spiraling and wrong-direction walk.
+                if self.is_forward_move:
                     velocity.x = linear_speed
+                else:
+                    velocity.x = -linear_speed
 
-                velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
+                # --- CRITICAL FIX 3: Proximity Singularity ---
+                # When very close, math.atan2 creates wild steering angles. 
+                # Coast straight by locking into the final yaw.
+                if distance_error < 0.15:
+                    velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
+                else:
+                    velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
+
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
             # Phase 3: At the destination — rotate to correct any yaw drift.
             else:
-                self.position_reached = True # Latch the state! We made it to the XY coords.
+                self.position_reached = True 
                 
                 if abs(final_yaw_error) > self.YAW_TOLERANCE:
                     velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
