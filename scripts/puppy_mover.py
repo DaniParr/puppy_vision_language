@@ -27,7 +27,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.05   # meters — accept goal within 15cm radius
+        self.DIST_TOLERANCE = 0.01   # meters — accept goal within 15cm radius
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
@@ -142,12 +142,34 @@ class PuppyPiDirectDriver:
             return
 
         # --- CASE 3: Drive toward target (x!=0, y optional) ---
+
+        # --- CASE 3R: Reverse — negative x means drive straight backward ---
+        # Skip bearing/pivot logic entirely; project the goal directly behind
+        # the robot so it walks backward without turning around.
+        if depth_x < 0.0:
+            total_distance = abs(depth_x)
+            stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
+            travel_distance = total_distance - stop_dist
+            self.goal_yaw = self.robot_yaw  # hold current heading throughout
+            if radian_z != 0.0:
+                self.goal_yaw = self.normalize_angle(self.robot_yaw + radian_z)
+            # Project goal directly behind the robot in the global frame
+            reverse_bearing = self.normalize_angle(self.robot_yaw + math.pi)
+            self.goal_x = self.robot_x + travel_distance * math.cos(reverse_bearing)
+            self.goal_y = self.robot_y + travel_distance * math.sin(reverse_bearing)
+            rospy.loginfo(
+                "CASE 3R — Reverse: dist %.2f m → goal (%.2f, %.2f)",
+                travel_distance, self.goal_x, self.goal_y
+            )
+            self.has_goal = True
+            return
+
         bearing_to_target = math.atan2(depth_y, depth_x)
         total_distance = math.sqrt(depth_x**2 + depth_y**2)
         # Scale stop buffer to 20% of total distance, capped at STOP_DISTANCE.
         # This prevents short commands (e.g. 0.3m) from having their entire
         # travel distance consumed by a fixed stop buffer.
-        stop_dist = min(self.STOP_DISTANCE, total_distance * 0.1)
+        stop_dist = min(self.STOP_DISTANCE, total_distance * 0.2)
         travel_distance = total_distance - stop_dist
 
         approach_yaw = self.normalize_angle(self.robot_yaw + bearing_to_target)
@@ -216,20 +238,29 @@ class PuppyPiDirectDriver:
 
             velocity = Velocity()
 
-            # Phase 1: Severely off-course — pure pivot, no forward motion
-            if distance_error > self.DIST_TOLERANCE and abs(heading_error) > math.pi / 2:
+            # Phase 1: Severely off-course — pure pivot, no forward motion.
+            # Only triggers when the robot needs to turn more than 90° AND
+            # the goal is in front (positive x command). Reverse goals skip
+            # this phase entirely and are handled in Phase 2 with negative x.
+            if distance_error > self.DIST_TOLERANCE and abs(heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
                     velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                 )
 
-            # Phase 2: Walk forward while correcting heading simultaneously
+            # Phase 2: Walk toward goal while correcting heading simultaneously.
+            # If the goal is behind the robot (heading_error > 90°) drive backward
+            # instead of turning around — this handles reverse commands.
             elif distance_error > self.DIST_TOLERANCE:
                 linear_speed = self.K_LINEAR * distance_error
                 linear_speed = self.apply_velocity_limits(
                     linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
                 )
-                velocity.x = linear_speed
+                # If goal is roughly behind us, drive backward
+                if abs(heading_error) > math.pi / 2:
+                    velocity.x = -linear_speed
+                else:
+                    velocity.x = linear_speed
 
                 velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
                 velocity.yaw_rate = self.apply_velocity_limits(
