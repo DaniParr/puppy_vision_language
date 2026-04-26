@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = .3
+        self.STOP_DISTANCE = .01
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
