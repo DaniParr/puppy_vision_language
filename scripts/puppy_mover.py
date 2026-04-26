@@ -5,17 +5,6 @@ from geometry_msgs.msg import PoseStamped, Twist, Point
 from tf.transformations import euler_from_quaternion
 from puppy_control.msg import Velocity, Pose
 
-STAND = {
-    'roll': math.radians(0),
-    'pitch': math.radians(0),
-    'yaw': 0.000,
-    'height': -10,
-    'x_shift': 0.4,
-    'stance_x': 0,
-    'stance_y': 0,
-    'run_time': 2,
-}
-
 
 class PuppyPiDirectDriver:
     def __init__(self):
@@ -45,6 +34,16 @@ class PuppyPiDirectDriver:
         self.robot_y = 0.0
         self.robot_yaw = 0.0
         
+        STAND = Pose()
+        STAND.roll = math.radians(0)
+        STAND.pitch = math.radians(0)
+        STAND.yaw = 0.000
+        STAND.height = -10
+        STAND.x_shift = 0.4
+        STAND.stance_x = 0
+        STAND.stance_y = 0
+        STAND.run_time = 2
+
         # Goal State
         self.has_goal = False
         self.goal_x = 0.0
