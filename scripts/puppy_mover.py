@@ -14,6 +14,7 @@ class PuppyPiDirectDriver:
         self.STOP_DISTANCE = 0.05    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
+        self.COMP_X_FORWARD = 4.0
 
         # Velocity Limits (raw hardware units)
         self.MAX_LINEAR_SPEED = 15
@@ -256,6 +257,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
+                    velocity.x = self.COMP_X_FORWARD
 
                 # Phase 2: Walk toward goal.
                 else:
@@ -289,6 +291,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
+                    velocity.x = self.COMP_X_FORWARD
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
