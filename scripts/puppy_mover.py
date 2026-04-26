@@ -21,7 +21,7 @@ class PuppyPiDirectDriver:
         self.MAX_ANGULAR_SPEED = 0.5
         
         self.MIN_LINEAR_SPEED = 7
-        self.MIN_ANGULAR_SPEED = 0.2
+        self.MIN_ANGULAR_SPEED = 0.1
 
         # Proportional Control Gains
         self.K_LINEAR = 50.0
@@ -257,7 +257,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
-                    velocity.x = self.COMP_X_FORWARD
+               #     velocity.x = self.COMP_X_FORWARD
 
                 # Phase 2: Walk toward goal.
                 else:
@@ -291,7 +291,7 @@ class PuppyPiDirectDriver:
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
-                    velocity.x = self.COMP_X_FORWARD
+                #    velocity.x = self.COMP_X_FORWARD
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
