@@ -140,6 +140,27 @@ class PuppyVisionLanguageNode:
                         "scan_height": 0.25,
                     }
                 ]
+            
+            elif prompt == "move":
+                summary = "moving 1 meter forward"
+                actions = [
+                    {
+                        "file_name": "move",
+                        "action_type": "move",
+                        "move_meters": 1.0,
+                    }
+                ]
+            
+            elif prompt == "rotate":
+                summary = "rotating 90 degrees CW"
+                actions = [
+                    {
+                        "file_name": "rotate",
+                        "action_type": "rotate",
+                        "rotate_radians": -1 * np.pi / 2,
+                    }
+                ]
+            
             else:
                 summary, actions = self.brain.send_request(prompt, frame)
 
@@ -389,7 +410,11 @@ class PuppyVisionLanguageNode:
 
         duration = abs(radians) / ANGULAR_SPEED
         move     = Point()
-        move.angular.z = 1.0 if radians >= 0 else -1.0
+        move.z   = radians
+        
+        self._vel_pub.publish(move)
+
+        return
 
         rospy.loginfo(
             "Rotating %s %.4f rad (%.2f s)",
