@@ -27,7 +27,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.09   # meters — accept goal within 15cm radius
+        self.DIST_TOLERANCE = 0.03   # meters — accept goal within 15cm radius
         self.YAW_TOLERANCE = 0.5    # radians
 
         # --- STATE VARIABLES ---
