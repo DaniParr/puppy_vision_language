@@ -11,7 +11,7 @@ class PuppyPiDirectDriver:
         rospy.init_node('puppypi_direct_driver', anonymous=True)
         
         # --- CONFIGURATION & CONSTANTS ---
-        self.STOP_DISTANCE = 0.08    # meters — goal point placed well short of target
+        self.STOP_DISTANCE = 0.05    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
 
@@ -27,7 +27,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.15   # meters — accept goal within 15cm radius
+        self.DIST_TOLERANCE = 0.08   # meters — accept goal within 15cm radius
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
