@@ -1,12 +1,19 @@
+#!/usr/bin/env python3
+import math
+import rospy
+from geometry_msgs.msg import Twist
+from puppy_control.msg import Velocity
 from sensor_msgs.msg import LaserScan
 
 from puppy_mover import PuppyPiDirectDriver
+
 class BugAlgorithm(PuppyPiDirectDriver):
 
     def __init__(self):
 
         super().__init__
 
+        #SUBSCRIBER TO LIDAR
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
         self.bug_state = "GO_TO_GOAL"  # Can be "GO_TO_GOAL" or "WALL_FOLLOW"
 
@@ -20,10 +27,8 @@ class BugAlgorithm(PuppyPiDirectDriver):
             'right': float('inf'),
             'left': float('inf')
         }
-        
 
-
-    def scan_callback(self):
+    def scan_callback(sel, msg):
 
         """Processes 360-degree LiDAR into 3 discrete regions."""
         ranges = msg.ranges
@@ -60,15 +65,113 @@ class BugAlgorithm(PuppyPiDirectDriver):
     
     def control_loop(self):
 
-        state_dict = {}
+        #state_dict = {}
 
         while not rospy.is_shutdown():
             if not self.has_goal:
                 self.RATE.sleep()
                 continue
+            
+            # Calculate distance and angle to the target
+            dx = self.goal_x - self.robot_x
+            dy = self.goal_y - self.robot_y
+            distance_error = math.sqrt(dx**2 + dy**2)
+            angle_to_goal = math.atan2(dy, dx)
+            heading_error = self.normalize_angle(angle_to_goal - self.robot_yaw)
+
+            #Arrival check. Check if distance error is less than tolerance.
+
+            if distance_error <= self.DIST_TOLERANCE:
+                final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
+                if abs(final_yaw_error) > self.YAW_TOLERANCE:
+                    velocity = Velocity()
+                    velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
+                    velocity.yaw_rate = self.apply_velocity_limits(
+                        velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                    )
+                    self.publish_velocity(velocity)
+                else:
+                    rospy.loginfo("Goal Reached! Awaiting next command.")
+                    self.has_goal = False
+                    self.stop_robot()
+                self.RATE.sleep()
+                continue
+
+            velocity = Velocity()
+            
+            # ==========================================
+            # THE BUG 0 LOGIC 
+            # ==========================================
+
+            # STATE 1: GO TO GOAL
+            if self.bug_state == "GO_TO_GOAL":
                 
-            # (Paste the Bug0 State Machine logic here)
-            pass
+                # Trigger: Obstacle ahead! 
+                if self.regions['front'] < self.OBSTACLE_THRESHOLD:
+                    rospy.logwarn("Obstacle at %.2fm! Switching to WALL_FOLLOW.", self.regions['front'])
+                    self.bug_state = "WALL_FOLLOW"
+                    self.stop_robot()
+                    self.RATE.sleep()
+                    continue
+
+                # Your original Phase 1 & 2 blending logic
+                BLEND_START_DIST = 0.5
+                blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
+                final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
+                blended_heading_error = (1.0 - blend) * heading_error + blend * final_yaw_error
+
+                # Pivot if facing away, drive if facing forward
+                if abs(heading_error) > 0.2:
+                    velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
+                    velocity.yaw_rate = self.apply_velocity_limits(
+                        velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                    )
+                else:
+                    linear_speed = self.K_LINEAR * distance_error
+                    velocity.x = self.apply_velocity_limits(
+                        linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
+                    )
+                    velocity.yaw_rate = self.K_ANGULAR * blended_heading_error
+                    velocity.yaw_rate = self.apply_velocity_limits(
+                        velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                    )
+
+            # STATE 2: WALL FOLLOW
+            elif self.bug_state == "WALL_FOLLOW":
+                
+                # Trigger: Line of sight restored (facing goal AND path is clear)
+                if abs(heading_error) < 0.3 and self.regions['front'] > (self.OBSTACLE_THRESHOLD + 0.1):
+                    rospy.loginfo("Line of sight clear! Resuming GO_TO_GOAL.")
+                    self.bug_state = "GO_TO_GOAL"
+                    self.stop_robot()
+                    self.RATE.sleep()
+                    continue
+
+                # Keep a cautious forward speed while wall following
+                velocity.x = self.MIN_LINEAR_SPEED + 2 
+                
+                # If we get stuck in an inside corner, turn left sharply in place
+                if self.regions['front'] < self.OBSTACLE_THRESHOLD:
+                    velocity.x = 0.0
+                    velocity.yaw_rate = self.MAX_ANGULAR_SPEED
+                else:
+                    # Proportional control for tracking the right wall
+                    error = self.regions['right'] - self.WALL_FOLLOW_DIST
+                    
+                    if math.isinf(self.regions['right']):
+                        # We lost the wall (outside corner)! Turn right to wrap around it.
+                        velocity.yaw_rate = -self.MAX_ANGULAR_SPEED
+                    else:
+                        # Steer to maintain exact distance
+                        steer = error * self.K_WALL 
+                        velocity.yaw_rate = self.apply_velocity_limits(
+                            steer, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                        )
+
+            # Send the final calculated velocity to the hardware
+            self.publish_velocity(velocity)
+            self.RATE.sleep()
+            
 
 
 if __name__ == '__main__':
