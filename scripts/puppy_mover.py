@@ -26,8 +26,8 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.05   # meters
-        self.YAW_TOLERANCE = 0.05    # radians
+        self.DIST_TOLERANCE = 0.01   # meters
+        self.YAW_TOLERANCE = 0.01    # radians
 
         # --- STATE VARIABLES ---
         self.robot_x = 0.0
