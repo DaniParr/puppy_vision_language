@@ -28,7 +28,7 @@ class PuppyPiDirectDriver:
         self.K_ANGULAR = 1.0
         
         # Tolerances
-        self.DIST_TOLERANCE = 0.15   # meters — reachable given hardware speed
+        self.DIST_TOLERANCE = 0.01   # meters — reachable given hardware speed
         self.YAW_TOLERANCE = 0.05    # radians
 
         # --- STATE VARIABLES ---
