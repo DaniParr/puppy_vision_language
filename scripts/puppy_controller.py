@@ -45,7 +45,7 @@ class PuppyController:
         stand.stance_y = 0
         stand.run_time = 3
 
-        self.pup_pose_pub.pub(stand)
+        self.pup_pose_pub.publish(stand)
 
     # ------------------------------------------------------------------
     # Callbacks
