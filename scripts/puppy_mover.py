@@ -14,6 +14,7 @@ class PuppyPiDirectDriver:
         self.STOP_DISTANCE = 0.05    # meters — goal point placed well short of target
         self.RATE = rospy.Rate(10)
         self.pose_received = False
+        self.COMP_X_FORWARD = 4.0
 
         # Velocity Limits (raw hardware units)
         self.MAX_LINEAR_SPEED = 15
@@ -28,7 +29,6 @@ class PuppyPiDirectDriver:
         
         # Tolerances
         self.DIST_TOLERANCE = 0.05 
-        # Bumped to 0.15 (8.5 deg) so the walking wobble doesn't prevent completion
         self.YAW_TOLERANCE = 0.15    
 
         # --- STATE VARIABLES ---
@@ -206,6 +206,11 @@ class PuppyPiDirectDriver:
 
     def control_loop(self):
         """Main loop that drives the robot to the goal in three phases."""
+        
+        # Distance at which we stop steering toward the specific X/Y point 
+        # and just lock our heading to coast in smoothly.
+        COAST_DISTANCE = 0.08 
+        
         while not rospy.is_shutdown():
             if not self.has_goal:
                 self.RATE.sleep()
@@ -219,11 +224,9 @@ class PuppyPiDirectDriver:
             heading_error = self.normalize_angle(angle_to_goal - self.robot_yaw)
             final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
 
-            # --- CRITICAL FIX 1: Orient properly for Reverse vs Forward ---
             if self.is_forward_move:
                 driving_heading_error = heading_error
             else:
-                # If driving backwards, we want the tail to track the goal
                 driving_heading_error = self.normalize_angle(heading_error + math.pi)
 
             approach_heading_error = driving_heading_error
@@ -237,57 +240,62 @@ class PuppyPiDirectDriver:
             )
 
             velocity = Velocity()
-            active_tolerance = self.DIST_TOLERANCE * 2.0 if self.position_reached else self.DIST_TOLERANCE
 
-            # Phase 1: Severely off-course — pure pivot, no forward motion.
-            if distance_error > active_tolerance and abs(driving_heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
-                self.position_reached = False
-                velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
-                velocity.yaw_rate = self.apply_velocity_limits(
-                    velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
-                )
+            # --- THE HARD LATCH ---
+            # If we cross the 5cm finish line, lock the state to True.
+            if distance_error <= self.DIST_TOLERANCE:
+                self.position_reached = True
 
-            # Phase 2: Walk toward goal while correcting heading simultaneously.
-            elif distance_error > active_tolerance:
-                self.position_reached = False
-                linear_speed = self.K_LINEAR * distance_error
-                linear_speed = self.apply_velocity_limits(
-                    linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
-                )
+            # If we haven't reached the goal yet, do Phase 1 or 2
+            if not self.position_reached:
                 
-                # --- CRITICAL FIX 2: Locked Gear ---
-                # We no longer dynamically switch gears based on heading_error. 
-                # This stops the spiraling and wrong-direction walk.
-                if self.is_forward_move:
-                    velocity.x = linear_speed
-                else:
-                    velocity.x = -linear_speed
-
-                # --- CRITICAL FIX 3: Proximity Singularity ---
-                # When very close, math.atan2 creates wild steering angles. 
-                # Coast straight by locking into the final yaw.
-                if distance_error < 0.15:
-                    velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
-                else:
+                # Phase 1: Severely off-course — pure pivot, no forward motion.
+                # Only allowed if we are far away (> COAST_DISTANCE) to prevent 
+                # violent spinning when we are practically right next to the goal.
+                if distance_error > COAST_DISTANCE and abs(driving_heading_error) > math.pi / 2 and self.goal_x != self.robot_x:
                     velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
+                    velocity.yaw_rate = self.apply_velocity_limits(
+                        velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                    )
+                    velocity.x = self.COMP_X_FORWARD
 
-                velocity.yaw_rate = self.apply_velocity_limits(
-                    velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
-                )
+                # Phase 2: Walk toward goal.
+                else:
+                    linear_speed = self.K_LINEAR * distance_error
+                    linear_speed = self.apply_velocity_limits(
+                        linear_speed, self.MAX_LINEAR_SPEED, self.MIN_LINEAR_SPEED
+                    )
+                    
+                    if self.is_forward_move:
+                        velocity.x = linear_speed
+                    else:
+                        velocity.x = -linear_speed
+
+                    # Proximity Coast: If we are close, stop tracking the violent X/Y angle 
+                    # and just lock onto the final resting yaw to coast straight in.
+                    if distance_error < COAST_DISTANCE:
+                        velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
+                    else:
+                        velocity.yaw_rate = self.K_ANGULAR * approach_heading_error
+
+                    velocity.yaw_rate = self.apply_velocity_limits(
+                        velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
+                    )
 
             # Phase 3: At the destination — rotate to correct any yaw drift.
+            # Because of the Hard Latch above, even if the robot drifts backward 10cm 
+            # while turning, it will stay stuck in this loop until the turn is done!
             else:
-                self.position_reached = True 
-                
                 if abs(final_yaw_error) > self.YAW_TOLERANCE:
                     velocity.yaw_rate = self.K_ANGULAR * final_yaw_error
                     velocity.yaw_rate = self.apply_velocity_limits(
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
+                    velocity.x = self.COMP_X_FORWARD
                 else:
                     rospy.loginfo("Goal Reached! Final yaw: %.2f rad", self.robot_yaw)
                     self.has_goal = False
-                    self.position_reached = False
+                    self.position_reached = False # Reset latch for the next command
                     self.stop_robot()
                     continue
 
