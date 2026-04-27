@@ -173,7 +173,6 @@ class BugAlgorithm(PuppyPiDirectDriver):
             self.RATE.sleep()
             
 
-
 if __name__ == '__main__':
     try:
         driver = PuppyPiBugDriver()
