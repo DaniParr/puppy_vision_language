@@ -1,0 +1,17 @@
+<launch>
+  <arg name="model" default="$(find my_robot)/urdf/robot.urdf"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch"/>
+
+  <param name="robot_description" textfile="$(arg model)"/>
+
+  <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+        args="-file $(arg model) -urdf -model my_robot"/>
+
+  <node name="puppy_gazebo_bridge" pkg="my_robot" type="puppy_gazebo_bridge.py" output="screen"/>
+
+  <node name="puppypi_direct_driver" pkg="my_robot" type="bug_algorithm.py" output="screen"/>
+
+  <node name="prompt_to_point" pkg="my_robot" type="prompt_to_point.py" output="screen"/>
+
+</launch>
