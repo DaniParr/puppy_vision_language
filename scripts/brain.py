@@ -32,7 +32,7 @@ import numpy as np
 
 # Configuration
 
-MODEL_ID       = "gemini-2.5-flash"
+MODEL_ID       = "gemini-2.5-flash-lite"
 MAX_TOKENS     = 512
 JPEG_QUALITY   = 75
 
@@ -69,6 +69,7 @@ ACTION_FILES = [
     "scan",
     "move",
     "rotate",
+    "move_to_object",
 ]
 
 TOOLS = [
@@ -98,7 +99,7 @@ TOOLS = [
                                     },
                                     "action_type": {
                                         "type": "string",
-                                        "enum": ["default", "scan", "move", "rotate"],
+                                        "enum": ["default", "scan", "move", "rotate", "move_to_object"],
                                         "description": (
                                             "Type of action. Use 'scan' for visual search, "
                                             "'move' for translation, 'rotate' for turning, "
@@ -110,28 +111,28 @@ TOOLS = [
                                     "scan_center_x": {
                                         "type": "number",
                                         "description": (
-                                            "[scan only] Horizontal center of the object of interest "
+                                            "[scan or move_to_object only] Horizontal center of the object of interest "
                                             "between 0.0 and 1.0 of the image width."
                                         ),
                                     },
                                     "scan_center_y": {
                                         "type": "number",
                                         "description": (
-                                            "[scan only] Vertical center of the object of interest "
+                                            "[scan or move_to_object only] Vertical center of the object of interest "
                                             "between 0.0 and 1.0 of the image height."
                                         ),
                                     },
                                     "scan_width": {
                                         "type": "number",
                                         "description": (
-                                            "[scan only] Width of the bounding box around the "
+                                            "[scan or move_to_object only] Width of the bounding box around the "
                                             "between 0.0 and 1.0 of the image width."
                                         ),
                                     },
                                     "scan_height": {
                                         "type": "number",
                                         "description": (
-                                            "[scan only] Height of the bounding box around the "
+                                            "[scan or move_to_object only] Height of the bounding box around the "
                                             "between 0.0 and 1.0 of the image height."
                                         ),
                                     },
