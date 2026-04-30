@@ -12,3 +12,5 @@ Steffano - Controller and Hector SLAM configuration based on Coordinate Passed i
 based on the 2D lidar.
 Daniel - Implemented the http request to gemini to allow the robo puppy to scan and identity the object. Also wrote the FAST algorithm to send
 the depth and lateral coordinate to the controller.
+
+Link to Repository: https://github.com/DaniParr/puppy_vision_language/tree/working-mvp 
