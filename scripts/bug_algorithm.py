@@ -21,8 +21,9 @@ class BugAlgorithm(PuppyPiDirectDriver):
         self.clear_count = 0
         self.CLEAR_COUNT_THRESHOLD = 10  # must be clear for 10 readings before resuming
 
-        self.OBSTACLE_THRESHOLD = 0.5
-        self.WALL_FOLLOW_DIST = 0.4
+        self.OBSTACLE_THRESHOLD = 0.25
+        self.WALL_FOLLOW_DIST = 0.15
+        self.avoid_target_yaw = 0.0
         self.K_WALL = 2.0
 
         self.regions = {
@@ -91,14 +92,25 @@ class BugAlgorithm(PuppyPiDirectDriver):
 
             velocity = Velocity()
 
+            # ==========================================
+            # THE 3-STATE BUG ALGORITHM 
+            # ==========================================
+
+            # STATE 1: GO TO GOAL
             if self.bug_state == "GO_TO_GOAL":
+                # Trigger: Obstacle ahead!
                 if self.regions['front'] < self.OBSTACLE_THRESHOLD:
-                    rospy.logwarn("Obstacle at %.2fm! Switching to WALL_FOLLOW.", self.regions['front'])
-                    self.bug_state = "WALL_FOLLOW"
+                    rospy.logwarn("Obstacle detected! Initiating fixed turn.")
+                    self.bug_state = "AVOID_TURN"
+                    
+                    # Calculate target: Current heading + 90 degrees (1.57 radians) to the left
+                    self.avoid_target_yaw = self.normalize_angle(self.robot_yaw + 1.57)
+                    
                     self.stop_robot()
                     self.RATE.sleep()
                     continue
 
+                # Normal driving logic to goal
                 BLEND_START_DIST = 0.5
                 blend = 1.0 - min(distance_error / BLEND_START_DIST, 1.0)
                 final_yaw_error = self.normalize_angle(self.goal_yaw - self.robot_yaw)
@@ -119,11 +131,33 @@ class BugAlgorithm(PuppyPiDirectDriver):
                         velocity.yaw_rate, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
                     )
 
+            # STATE 2: THE FIXED TURN (Your new logic!)
+            elif self.bug_state == "AVOID_TURN":
+                # Calculate how many radians we have left to turn
+                turn_error = self.normalize_angle(self.avoid_target_yaw - self.robot_yaw)
+                
+                # If we are within ~8 degrees of our target angle, finish the turn!
+                if abs(turn_error) < 0.15:
+                    rospy.loginfo("Finished 90-degree turn! Driving forward past obstacle.")
+                    self.bug_state = "WALL_FOLLOW"
+                    self.stop_robot()
+                    self.RATE.sleep()
+                    continue
+                
+                # Otherwise, keep turning smoothly to the left
+                # (Keeping a tiny bit of forward x speed so the quadruped legs step smoothly)
+                velocity.x = self.MIN_LINEAR_SPEED
+                velocity.yaw_rate = self.MAX_ANGULAR_SPEED
+
+            # STATE 3: DRIVE PAST OBSTACLE
             elif self.bug_state == "WALL_FOLLOW":
+                # We are no longer using noisy proportional steering. 
+                # We just drive straight along the wall until the path to the goal is clear!
+                
                 if self.regions['front'] > (self.OBSTACLE_THRESHOLD + 0.1) and self.regions['left'] > (self.OBSTACLE_THRESHOLD + 0.1):
-                    self.clear_count+=1
+                    self.clear_count += 1
                     if self.clear_count >= self.CLEAR_COUNT_THRESHOLD:
-                        rospy.loginfo("Path clear! Resuming GO_TO_GOAL.")
+                        rospy.loginfo("Path clear! Turning back to GO_TO_GOAL.")
                         self.bug_state = "GO_TO_GOAL"
                         self.clear_count = 0
                         self.stop_robot()
@@ -132,21 +166,9 @@ class BugAlgorithm(PuppyPiDirectDriver):
                 else:
                     self.clear_count = 0
 
-                if self.regions['front'] < self.OBSTACLE_THRESHOLD:
-                    rospy.loginfo("Turning left to clear obstacle...")
-                    velocity.x = 0.0
-                    velocity.yaw_rate = 10.0
-                else:
-                    rospy.loginfo("Following wall...")
-                    velocity.x = self.MIN_LINEAR_SPEED*3
-                    if math.isinf(self.regions['right']):
-                        velocity.yaw_rate = -self.MAX_ANGULAR_SPEED
-                    else:
-                        error = self.regions['right'] - self.WALL_FOLLOW_DIST
-                        steer = error * self.K_WALL
-                        velocity.yaw_rate = self.apply_velocity_limits(
-                            steer, self.MAX_ANGULAR_SPEED, self.MIN_ANGULAR_SPEED
-                        )
+                # Just drive straight and steady
+                velocity.x = self.MIN_LINEAR_SPEED * 2
+                velocity.yaw_rate = 0.0
 
             self.publish_velocity(velocity)
             self.RATE.sleep()
