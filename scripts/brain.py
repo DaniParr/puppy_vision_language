@@ -80,6 +80,7 @@ TOOLS = [
                 "description": (
                     "Select a sequence of action files to execute in response to a prompt. "
                     "Each action may include special parameters depending on its type: "
+                    "'move_to_object' requires bounding box info, "
                     "'scan' requires bounding box info, 'move' requires displacement in meters, "
                     "'rotate' requires angle in radians."
                 ),

@@ -213,6 +213,7 @@ class PuppyVisionLanguageNode:
 
                 else:
                     self._execute_action(file_name)
+                    self._execute_action("stand.d6ac")
 
         except Exception as exc:
             rospy.logerr("Error in execute_sequence: %s", exc)
@@ -233,7 +234,6 @@ class PuppyVisionLanguageNode:
             self._action_service(file_name, 1)
         except rospy.ServiceException as exc:
             rospy.logerr("Action service call failed for '%s': %s", file_name, exc)
-        self._action_service("stand.d6ac", 1)
 
     def _execute_scan(self, file_name: str, cx: float, cy: float, w: float, h: float, move: bool = False) -> None:
         """
@@ -244,7 +244,6 @@ class PuppyVisionLanguageNode:
             "Scan — file: %s | center=(%.2f, %.2f) | size=(%.2f x %.2f)",
             file_name, cx, cy, w, h,
         )
-        self._execute_action(file_name)
 
         settle = rospy.Duration(0.5)  # wait for robot to settle after each pose
 
@@ -260,22 +259,22 @@ class PuppyVisionLanguageNode:
         # --- Shot 2: lying down ---
         self._execute_action("lie_down.d6ac")
         
-        time_received = datetime.now()
-        
         rospy.sleep(settle)
         
-        with self._frame_lock:
+        time_received = datetime.now()
+        
+        # with self._frame_lock:
 
-            rate = rospy.Rate(10)
-            while self.last_update_time <= time_received:
-                rospy.loginfo("Waiting for new frame")
-                rate.sleep()
+        rate = rospy.Rate(10)
+        while self.last_update_time <= time_received:
+            rospy.loginfo("Waiting for new frame")
+            rate.sleep()
 
-            if self._latest_frame is None:
-                rospy.logwarn("No frame available for lying down shot.")
-                return
-            
-            frame_lie = self._latest_frame.copy()
+        if self._latest_frame is None:
+            rospy.logwarn("No frame available for lying down shot.")
+            return
+        
+        frame_lie = self._latest_frame.copy()
 
         # --- Return to standing ---
         self._execute_action("stand.d6ac")
